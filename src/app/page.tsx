@@ -29,7 +29,7 @@ export default function Home() {
       <header>
         <div>
           <h1>Jev Keiba Calling</h1>
-          <p>同じ映像・固定LLMで「Jevなし」と「Jevあり」を比較します。音声は使用しません。</p>
+          <p>同じ映像・固定LLMで「Jevなし」と「Jevあり」を比較します。音声はAI認識に使用しません。</p>
         </div>
         <div className="header-actions">
           <a className="deploy-link" href={DEPLOY_URL} target="_blank" rel="noreferrer">
@@ -45,7 +45,7 @@ export default function Home() {
           <div><dt>固定LLM</dt><dd>{status?.commentaryModel ?? "確認中"}</dd></div>
           <div><dt>Jev</dt><dd>{status?.jevModel ?? "確認中"}</dd></div>
           <div><dt>入力</dt><dd>映像＋ブラウザCV</dd></div>
-          <div><dt>音声</dt><dd>取得しない</dd></div>
+          <div><dt>音声</dt><dd>再生のみ・AI入力なし</dd></div>
         </dl>
       </section>
 

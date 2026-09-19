@@ -175,7 +175,6 @@ export default function YouTubeTranscriber() {
   const [analyzing, setAnalyzing] = useState(false);
   const [rows, setRows] = useState<TimelineRow[]>([]);
   const [error, setError] = useState("");
-  const [playerSession, setPlayerSession] = useState(0);
   const [description, setDescription] = useState("");
   const [raceContext, setRaceContext] = useState<RaceContext>({ entrants: [] });
   const [removedSpoilerLines, setRemovedSpoilerLines] = useState(0);
@@ -184,6 +183,7 @@ export default function YouTubeTranscriber() {
   const [pendingElapsedMs, setPendingElapsedMs] = useState<number | null>(null);
 
   const videoWrapRef = useRef<HTMLDivElement | null>(null);
+  const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const captureVideoRef = useRef<HTMLVideoElement | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,6 +208,10 @@ export default function YouTubeTranscriber() {
     setVideoId(id);
     setRows([]);
     setError("");
+    void loadVisionModels().catch((caught) => {
+      setVisionStatus("idle");
+      setError(caught instanceof Error ? caught.message : "ブラウザCVモデルを読み込めませんでした。");
+    });
   }
 
   function parseDescription() {
@@ -437,6 +441,13 @@ export default function YouTubeTranscriber() {
     }
   }
 
+  function sendYouTubeCommand(func: "playVideo" | "unMute") {
+    youtubeIframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: "command", func, args: [] }),
+      "https://www.youtube-nocookie.com",
+    );
+  }
+
   async function analyzeNextFrame() {
     if (!activeRef.current || sampleCountRef.current >= MAX_SAMPLES) {
       releaseCapture();
@@ -532,7 +543,8 @@ export default function YouTubeTranscriber() {
       startedAtRef.current = performance.now();
       setAnalyzing(true);
       setVisionStatus("running");
-      setPlayerSession((current) => current + 1);
+      sendYouTubeCommand("unMute");
+      sendYouTubeCommand("playVideo");
 
       displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
       visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
@@ -574,7 +586,7 @@ export default function YouTubeTranscriber() {
     <section className="youtube-tool">
       <h2>YouTube映像・リアルタイム実況比較</h2>
       <p className="description">
-        映像をミュート再生し、ブラウザ内で馬と騎手姿勢を連続検出します。音声は取得も送信もしません。
+        利用者には音声付きで再生し、ブラウザ内で馬と騎手姿勢を連続検出します。音声はAIへ取得・送信しません。
       </p>
 
       <div className="url-row">
@@ -620,8 +632,8 @@ export default function YouTubeTranscriber() {
           <div className="youtube-workspace">
             <div className="video-wrap" ref={videoWrapRef}>
               <iframe
-                key={playerSession}
-                src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=${analyzing ? "1" : "0"}&mute=1&playsinline=1`}
+                ref={youtubeIframeRef}
+                src={`https://www.youtube-nocookie.com/embed/${videoId}?playsinline=1&enablejsapi=1&rel=0`}
                 title="YouTube video player"
                 allow="autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
@@ -640,9 +652,9 @@ export default function YouTubeTranscriber() {
               <ol>
                 <li>「映像解析と再生を同時開始」を押す</li>
                 <li>候補の先頭に出るこのプレビュータブを選ぶ</li>
-                <li>共有後、無音再生とブラウザ内CVが始まる</li>
+                <li>共有後、音声付き再生とブラウザ内CVが始まる</li>
               </ol>
-              <p className="audio-free">音声トラック: <strong>取得しない</strong></p>
+              <p className="audio-free">音声: <strong>利用者へ再生／AI入力には使わない</strong></p>
               <div className="capture-actions">
                 {!analyzing ? (
                   <button onClick={startVisualAnalysis} disabled={!authorized || visionStatus === "loading"}>
