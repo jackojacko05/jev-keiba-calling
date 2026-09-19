@@ -29,13 +29,13 @@ npm run dev
 
 ```env
 AI_GATEWAY_API_KEY=...
-COMMENTARY_MODEL=google/gemini-3.8-flash
+COMMENTARY_MODEL=google/gemini-3-flash
 ```
 
 - `AI_GATEWAY_API_KEY`: Vercel AI Gatewayで発行する唯一の必須キー
 - `COMMENTARY_MODEL`: 視覚状態抽出とJevあり／なしの実況生成で使う固定モデル。画像入力対応モデルを指定する
 
-既定値は馬番など小さい視覚情報の読み取りを優先して `google/gemini-3.8-flash` です。Vercel AI Gateway上の料金は変わる可能性があるため、実行前にモデルページで確認してください。コストを優先する場合は環境変数で `google/gemini-2.5-flash-lite` などへ戻せますが、同じ比較実験中は固定してください。
+既定値は馬番など小さい視覚情報の読み取りと遅延のバランスを取った `google/gemini-3-flash` です。Vercel AI Gateway上の料金は変わる可能性があるため、実行前にモデルページで確認してください。コストを優先する場合は環境変数で `google/gemini-2.5-flash-lite` などへ戻せますが、同じ比較実験中は固定してください。
 
 Jevは `typesafe-ai/jev` 固定です。生成モデルとJevは、どちらもVercel AI Gateway経由で呼び出します。OpenAI・Anthropic・Google・TypeSafe個別のAPIキーは不要です。
 

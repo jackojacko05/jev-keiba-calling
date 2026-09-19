@@ -101,7 +101,7 @@ const SAMPLING_MODES: Record<SamplingMode, {
 }> = {
   economy: { label: "節約（変化時2〜4秒）", low: 4_000, medium: 3_000, high: 2_000, concurrency: 2 },
   balanced: { label: "標準（変化時1〜3秒）", low: 3_000, medium: 1_800, high: 1_000, concurrency: 3 },
-  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 3 },
+  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 2 },
 };
 const VISION_INTERVAL_MS = 350;
 const SCHEDULER_INTERVAL_MS = 250;

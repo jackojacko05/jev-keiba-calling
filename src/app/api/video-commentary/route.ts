@@ -5,7 +5,7 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "google/gemini-3.8-flash";
+const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "google/gemini-3-flash";
 const JEV_MODEL = "typesafe-ai/jev";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -132,6 +132,7 @@ async function extractVisualState(
       },
     ],
     temperature: 0,
+    reasoning: "none",
   });
 
   return {
@@ -250,8 +251,9 @@ async function narrate(state: VisualState, decision?: JevDecision) {
         ? { task: "Jevの判断を優先して実況する", visualState: state, jevDecision: decision }
         : { task: "視覚状態から直接実況する", visualState: state },
     ),
-    maxOutputTokens: 80,
+    maxOutputTokens: 160,
     temperature: 0.2,
+    reasoning: "none",
   });
 
   return {
