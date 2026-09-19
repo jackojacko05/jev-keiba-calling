@@ -178,10 +178,21 @@ async function askJev(state: VisualState) {
   const urgency = response.answers.urgency;
   const speakNow = response.answers.speakNow;
 
+  let normalizedEvent = event.choice;
+  if (normalizedEvent === "start_break" && state.phase !== "スタート") {
+    normalizedEvent = state.shouldSpeak ? "position_change" : "steady";
+  }
+  if (
+    (normalizedEvent === "rider_drive" || normalizedEvent === "rider_hold") &&
+    (state.jockeyActionConfidence < 0.8 || state.cameraShot === "俯瞰" || state.cameraShot === "リプレイ・演出")
+  ) {
+    normalizedEvent = state.shouldSpeak ? "position_change" : "steady";
+  }
+
   return {
     latencyMs: Math.round(performance.now() - startedAt),
     decision: {
-      event: event.choice,
+      event: normalizedEvent,
       delivery: delivery.choice,
       urgency: urgency.score,
       speakNow: speakNow.probability,
@@ -191,6 +202,37 @@ async function askJev(state: VisualState) {
       ),
     } satisfies JevDecision,
   };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function groundNarration(
+  text: string,
+  state: VisualState,
+  raceContext: z.infer<typeof raceContextSchema> | null,
+) {
+  const visibleNumbers = new Set(state.visibleHorseNumbers);
+  const minConfidence = state.cameraShot === "俯瞰" ? 0.95 : 0.85;
+  const groundedNames = new Set(
+    state.visibleHorses
+      .filter((horse) => horse.confidence >= minConfidence && visibleNumbers.has(horse.number))
+      .map((horse) => horse.horseName),
+  );
+  let grounded = text;
+  for (const entrant of raceContext?.entrants ?? []) {
+    if (groundedNames.has(entrant.horseName)) continue;
+    const safeName = escapeRegExp(entrant.horseName);
+    const replacement = visibleNumbers.has(entrant.number) ? `${entrant.number}番` : "馬群の一頭";
+    grounded = grounded
+      .replace(new RegExp(`${entrant.number}番(?:の)?${safeName}`, "g"), replacement)
+      .replace(new RegExp(safeName, "g"), replacement);
+  }
+  if (state.phase !== "スタート") {
+    grounded = grounded.replace(/スタートしました[。！]?/g, "馬群が進みます。");
+  }
+  return grounded.replace(/馬群の一頭、馬群の一頭/g, "馬群の各馬").trim();
 }
 
 async function narrate(state: VisualState, decision?: JevDecision) {
@@ -294,18 +336,22 @@ export async function POST(request: Request) {
     const assisted = spoken
       ? await narrate(vision.state, jevResult.decision)
       : { text: "", latencyMs: 0 };
+    const directText = groundNarration(vision.directText, vision.state, parsedRaceContext.success ? parsedRaceContext.data : null);
+    const assistedText = spoken
+      ? groundNarration(assisted.text, vision.state, parsedRaceContext.success ? parsedRaceContext.data : null)
+      : "";
 
     return NextResponse.json({
       mode: "live",
       visualState: vision.state,
       visionLatencyMs: vision.latencyMs,
-      direct: { text: vision.directText, latencyMs: 0 },
+      direct: { text: directText, latencyMs: 0 },
       jev: {
         decision: jevResult.decision,
         spoken,
         decisionLatencyMs: jevResult.latencyMs,
         narrationLatencyMs: assisted.latencyMs,
-        text: assisted.text,
+        text: assistedText,
       },
     });
   } catch (error) {

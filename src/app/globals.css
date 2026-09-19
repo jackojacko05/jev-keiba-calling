@@ -67,6 +67,8 @@ code { padding: 2px 5px; border-radius: 3px; background: #eeeeea; font-family: v
 .sampling-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .sampling-controls label { display: grid; flex: 1; min-width: 135px; gap: 4px; color: #666; font: 600 9px var(--font-geist-mono); text-transform: uppercase; }
 .sampling-controls select { min-width: 0; padding: 8px; border: 1px solid #aaa; border-radius: 5px; background: white; color: #171717; font: 600 11px var(--font-geist-mono); text-transform: none; }
+.sampling-controls .cv-toggle { flex-basis: 100%; }
+.sampling-controls .cv-toggle span { display: flex; gap: 6px; align-items: center; color: #444; font: 500 11px var(--font-geist-mono); text-transform: none; }
 .capture-status { display: block; margin-top: 10px; color: #777; font: 500 10px var(--font-geist-mono); }
 .live-vision { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); margin-top: 10px; overflow: hidden; border: 1px solid #263328; background: #101812; color: white; }
 .live-vision div { min-width: 0; padding: 9px 10px; border-right: 1px solid #263328; }

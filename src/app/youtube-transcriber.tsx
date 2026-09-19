@@ -167,6 +167,7 @@ export default function YouTubeTranscriber() {
   const [removedSpoilerLines, setRemovedSpoilerLines] = useState(0);
   const [samplingMode, setSamplingMode] = useState<SamplingMode>("balanced");
   const [maxSamples, setMaxSamples] = useState(15);
+  const [useBrowserCv, setUseBrowserCv] = useState(false);
   const [visionStatus, setVisionStatus] = useState<"idle" | "loading" | "ready" | "running">("idle");
   const [liveVision, setLiveVision] = useState<BrowserVision>(EMPTY_VISION);
   const [latestCapturedElapsedMs, setLatestCapturedElapsedMs] = useState<number | null>(null);
@@ -204,10 +205,6 @@ export default function YouTubeTranscriber() {
     setVideoStartSeconds(getYouTubeStartSeconds(url));
     setRows([]);
     setError("");
-    void loadVisionModels().catch((caught) => {
-      setVisionStatus("idle");
-      setError(caught instanceof Error ? caught.message : "ブラウザCVモデルを読み込めませんでした。");
-    });
   }
 
   function parseDescription() {
@@ -471,7 +468,7 @@ export default function YouTubeTranscriber() {
     try {
       const canvas = captureVideoCanvas();
       const image = canvasToJpeg(canvas);
-      const browserVision = liveVisionRef.current;
+      const browserVision = useBrowserCv ? liveVisionRef.current : null;
       const response = await fetch("/api/video-commentary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -543,7 +540,7 @@ export default function YouTubeTranscriber() {
     setLiveVision(EMPTY_VISION);
 
     try {
-      if (!objectDetectorRef.current || !poseDetectorRef.current) {
+      if (useBrowserCv && (!objectDetectorRef.current || !poseDetectorRef.current)) {
         void loadVisionModels().catch((caught) => {
           setVisionStatus("idle");
           setError(caught instanceof Error ? caught.message : "ブラウザCVモデルを読み込めませんでした。");
@@ -576,7 +573,7 @@ export default function YouTubeTranscriber() {
       sendYouTubeCommand("setOption", ["captions", "track", {}]);
 
       displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
-      visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
+      if (useBrowserCv) visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
       lastCaptureAtRef.current = performance.now() + 700;
       timerRef.current = setInterval(scheduleFrame, SCHEDULER_INTERVAL_MS);
     } catch (caught) {
@@ -711,6 +708,18 @@ export default function YouTubeTranscriber() {
                     ))}
                   </select>
                 </label>
+                <label className="cv-toggle">
+                  端末内の補助解析
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={useBrowserCv}
+                      onChange={(event) => setUseBrowserCv(event.target.checked)}
+                      disabled={analyzing}
+                    />
+                    ブラウザCV（無料・初回は重い）
+                  </span>
+                </label>
               </div>
               <div className="capture-actions">
                 {!analyzing ? (
@@ -726,7 +735,7 @@ export default function YouTubeTranscriber() {
               </div>
               <small className="capture-status">
                 {analyzing
-                  ? `連続認識中・取得 ${capturedCount}/${maxSamples}・API処理中 ${inFlightCount}件・CV ${visionStatus}`
+                  ? `連続認識中・取得 ${capturedCount}/${maxSamples}・API処理中 ${inFlightCount}件・CV ${useBrowserCv ? visionStatus : "off"}`
                   : rows.length
                     ? `${rows.length}フレームの解析完了`
                     : `${SAMPLING_MODES[samplingMode].label}・最大${maxSamples}フレーム`}
@@ -734,7 +743,7 @@ export default function YouTubeTranscriber() {
             </div>
           </div>
 
-          {(analyzing || liveVision.confidence > 0) && (
+          {useBrowserCv && (analyzing || liveVision.confidence > 0) && (
             <div className="live-vision" aria-live="polite">
               <div><small>Browser CV</small><strong>{analyzing ? "● LIVE" : "停止"}</strong></div>
               <div><small>馬</small><strong>{liveVision.horseCount}頭</strong></div>
