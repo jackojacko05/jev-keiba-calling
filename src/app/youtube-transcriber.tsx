@@ -403,7 +403,11 @@ export default function YouTubeTranscriber() {
   }
 
   async function runVisionLoop() {
-    if (!activeRef.current || !objectDetectorRef.current || !poseDetectorRef.current) return;
+    if (!activeRef.current) return;
+    if (!objectDetectorRef.current || !poseDetectorRef.current) {
+      visionTimerRef.current = setTimeout(() => void runVisionLoop(), 500);
+      return;
+    }
     try {
       const canvas = captureVideoCanvas();
       const [predictions, poses] = await Promise.all([
@@ -524,7 +528,12 @@ export default function YouTubeTranscriber() {
     setLiveVision(EMPTY_VISION);
 
     try {
-      await loadVisionModels();
+      if (!objectDetectorRef.current || !poseDetectorRef.current) {
+        void loadVisionModels().catch((caught) => {
+          setVisionStatus("idle");
+          setError(caught instanceof Error ? caught.message : "ブラウザCVモデルを読み込めませんでした。");
+        });
+      }
       const displayOptions: CurrentTabDisplayMediaOptions = {
         video: true,
         audio: false,
@@ -689,8 +698,8 @@ export default function YouTubeTranscriber() {
               </div>
               <div className="capture-actions">
                 {!analyzing ? (
-                  <button onClick={startVisualAnalysis} disabled={!authorized || visionStatus === "loading"}>
-                    {visionStatus === "loading" ? "CVモデルを読込中…" : "映像解析と再生を同時開始"}
+                  <button onClick={startVisualAnalysis} disabled={!authorized}>
+                    映像解析と再生を同時開始
                   </button>
                 ) : (
                   <button className="stop" onClick={releaseCapture}>解析を停止</button>
