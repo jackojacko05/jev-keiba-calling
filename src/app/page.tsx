@@ -25,6 +25,9 @@ type Result = {
 type Row = Result & { frame: RaceFrame; runAt: string };
 type Status = { typesafe: boolean; aiGateway: boolean; model: string };
 
+const DEPLOY_URL =
+  "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY,TYPESAFE_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20and%20TypeSafe%20API%20keys.%20The%20keys%20stay%20in%20your%20Vercel%20project.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-keys";
+
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
@@ -91,7 +94,12 @@ export default function Home() {
           <h1>Jev Keiba Calling</h1>
           <p>同一の架空レース状態で「LLM直接実況」と「Jev判断＋同じLLM」を比較します。</p>
         </div>
-        <span className={live ? "live" : "demo"}>{live ? "LIVE API" : "DEMO MODE"}</span>
+        <div className="header-actions">
+          <a className="deploy-link" href={DEPLOY_URL} target="_blank" rel="noreferrer">
+            自分のキーでDeploy
+          </a>
+          <span className={live ? "live" : "demo"}>{live ? "LIVE API" : "DEMO MODE"}</span>
+        </div>
       </header>
 
       <YouTubeTranscriber />

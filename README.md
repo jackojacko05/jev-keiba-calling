@@ -1,5 +1,7 @@
 # Jev Keiba Calling
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY,TYPESAFE_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20and%20TypeSafe%20API%20keys.%20The%20keys%20stay%20in%20your%20Vercel%20project.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-keys)
+
 同じ架空レース状態を入力し、次の2経路を比較する再現可能な実験環境です。
 
 - 通常LLMによる直接実況
@@ -34,6 +36,31 @@ TRANSCRIPTION_MODEL=openai/whisper-1
 キーが揃っていない場合は固定値を返すデモモードになります。実測には両方のキーが必要です。
 
 このリポジトリはローカル実測を基本とします。公開Vercelサイトに個人キーを設定すると、閲覧者のAPI利用がそのキーの予算・利用枠へ計上されます。ソースだけを公開し、各利用者が自分の `.env.local` を用意する運用を推奨します。
+
+「Deploy with Vercel」を使う場合は、利用者自身のGitHub/Vercelへリポジトリが複製され、デプロイ画面で利用者自身のキーを入力します。リポジトリ所有者にはキーが共有されません。
+
+## API keys
+
+### Vercel AI Gateway
+
+1. [AI Gateway API Keys](https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys)を開く
+2. `Create key` を押し、キー名を入力する
+3. 表示された値をすぐコピーする。作成後に値を再表示することはできません
+4. `.env.local` の `AI_GATEWAY_API_KEY` に設定する
+
+CLIでも作成できます。
+
+```bash
+npx vercel@latest ai-gateway api-keys create --name jev-keiba-calling-local
+```
+
+### TypeSafe Jev
+
+1. [TypeSafe Console Keys](https://console.typesafe.ai/keys)を開く
+2. API keyを作成してコピーする
+3. `.env.local` の `TYPESAFE_API_KEY` に設定する
+
+キーはチャット、Issue、コミットへ貼らないでください。
 
 ## Reproduce
 
