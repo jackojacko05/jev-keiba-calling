@@ -1,29 +1,47 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FALLBACK_MODELS, MODEL_OPTIONS, type ModelId } from "@/lib/models";
 import { RACE_FRAMES, type RaceFrame } from "@/lib/race";
 import YouTubeTranscriber from "./youtube-transcriber";
 
-type Result = {
-  mode: "demo" | "live";
+type Decision = {
+  focus: string;
+  event: string;
+  urgency: number;
+  speakNow: number;
+  confidence: number;
+};
+
+type ModelResult = {
+  model: ModelId;
   direct: { text: string; latencyMs: number };
   jev: {
     text: string;
-    decisionLatencyMs: number;
     narrationLatencyMs: number;
     totalLatencyMs: number;
-    decision: {
-      focus: string;
-      event: string;
-      urgency: number;
-      speakNow: number;
-      confidence: number;
-    };
   };
 };
 
-type Row = Result & { frame: RaceFrame; runAt: string };
-type Status = { typesafe: boolean; aiGateway: boolean; model: string };
+type BenchmarkResponse = {
+  mode: "demo" | "live";
+  decision: Decision;
+  decisionLatencyMs: number;
+  results: ModelResult[];
+};
+
+type Row = ModelResult & {
+  mode: "demo" | "live";
+  decision: Decision;
+  decisionLatencyMs: number;
+  frame: RaceFrame;
+  runAt: string;
+};
+type Status = {
+  typesafe: boolean;
+  aiGateway: boolean;
+  defaultModels: [ModelId, ModelId];
+};
 
 const DEPLOY_URL =
   "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY,TYPESAFE_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20and%20TypeSafe%20API%20keys.%20The%20keys%20stay%20in%20your%20Vercel%20project.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-keys";
@@ -31,13 +49,17 @@ const DEPLOY_URL =
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
+  const [models, setModels] = useState<[ModelId, ModelId]>([...FALLBACK_MODELS]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/commentary")
       .then((response) => response.json())
-      .then((data: Status) => setStatus(data))
+      .then((data: Status) => {
+        setStatus(data);
+        setModels(data.defaultModels);
+      })
       .catch(() => setStatus(null));
   }, []);
 
@@ -51,15 +73,23 @@ export default function Home() {
         const response = await fetch("/api/commentary", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frame }),
+          body: JSON.stringify({ frame, models }),
         });
-        const result = (await response.json()) as Result | { error: string };
+        const result = (await response.json()) as BenchmarkResponse | { error: string };
         if (!response.ok || "error" in result) {
           throw new Error("error" in result ? result.error : "実行に失敗しました");
         }
+        const runAt = new Date().toISOString();
         setRows((current) => [
           ...current,
-          { ...result, frame, runAt: new Date().toISOString() },
+          ...result.results.map((modelResult) => ({
+            ...modelResult,
+            mode: result.mode,
+            decision: result.decision,
+            decisionLatencyMs: result.decisionLatencyMs,
+            frame,
+            runAt,
+          })),
         ]);
       }
     } catch (caught) {
@@ -71,9 +101,9 @@ export default function Home() {
 
   function downloadJson() {
     const payload = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: new Date().toISOString(),
-      model: status?.model,
+      models,
       results: rows,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -86,6 +116,14 @@ export default function Home() {
   }
 
   const live = Boolean(status?.typesafe && status?.aiGateway);
+  const duplicateModels = models[0] === models[1];
+  const totalRuns = RACE_FRAMES.length * 2;
+
+  function setModel(index: 0 | 1, model: ModelId) {
+    setModels((current) => index === 0 ? [model, current[1]] : [current[0], model]);
+    setRows([]);
+    setError("");
+  }
 
   return (
     <main>
@@ -105,15 +143,30 @@ export default function Home() {
       <YouTubeTranscriber />
 
       <section className="settings">
+        <div className="model-controls">
+          {([0, 1] as const).map((index) => (
+            <label key={index}>
+              モデル {index === 0 ? "A" : "B"}
+              <select
+                value={models[index]}
+                onChange={(event) => setModel(index, event.target.value as ModelId)}
+                disabled={running}
+              >
+                {MODEL_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
         <dl>
           <div><dt>Jev</dt><dd>{status?.typesafe ? "接続済み" : "未設定"}</dd></div>
           <div><dt>AI Gateway</dt><dd>{status?.aiGateway ? "接続済み" : "未設定"}</dd></div>
-          <div><dt>Model</dt><dd>{status?.model ?? "確認中"}</dd></div>
-          <div><dt>Fixtures</dt><dd>{RACE_FRAMES.length}</dd></div>
+          <div><dt>Runs</dt><dd>{RACE_FRAMES.length} fixtures × 2 models</dd></div>
         </dl>
         <div className="actions">
-          <button onClick={runBenchmark} disabled={running}>
-            {running ? `実行中 ${rows.length}/${RACE_FRAMES.length}` : "ベンチマーク実行"}
+          <button onClick={runBenchmark} disabled={running || duplicateModels}>
+            {running ? `実行中 ${rows.length}/${totalRuns}` : "2モデルを同時実行"}
           </button>
           <button className="secondary" onClick={downloadJson} disabled={!rows.length || running}>
             結果JSONを保存
@@ -121,6 +174,7 @@ export default function Home() {
         </div>
       </section>
 
+      {duplicateModels && <p className="error">異なるモデルを2つ選択してください。</p>}
       {error && <p className="error">{error}</p>}
 
       <div className="table-wrap">
@@ -128,6 +182,7 @@ export default function Home() {
           <thead>
             <tr>
               <th>時刻 / 状態</th>
+              <th>モデル</th>
               <th>LLM直接実況</th>
               <th>Jev判断</th>
               <th>Jev経由実況</th>
@@ -135,20 +190,21 @@ export default function Home() {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.frame.id}>
+              <tr key={`${row.frame.id}-${row.model}`}>
                 <td>
                   <strong>{row.frame.elapsedSeconds}秒・{row.frame.phase}</strong>
                   <small>{row.frame.facts.join(" / ")}</small>
                 </td>
+                <td><code>{row.model}</code></td>
                 <td>
                   {row.direct.text}
                   <small>{row.direct.latencyMs} ms</small>
                 </td>
                 <td>
-                  <code>{row.jev.decision.event}</code>
+                  <code>{row.decision.event}</code>
                   <small>
-                    focus={row.jev.decision.focus}, confidence={row.jev.decision.confidence.toFixed(3)}<br />
-                    Jev {row.jev.decisionLatencyMs} ms
+                    focus={row.decision.focus}, confidence={row.decision.confidence.toFixed(3)}<br />
+                    shared Jev {row.decisionLatencyMs} ms
                   </small>
                 </td>
                 <td>
@@ -159,8 +215,8 @@ export default function Home() {
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={4} className="empty">
-                  「ベンチマーク実行」を押すと、固定fixtureを順番に評価します。
+                <td colSpan={5} className="empty">
+                  2モデルを選び、同じJev判断と固定fixtureで並列評価します。
                 </td>
               </tr>
             )}
@@ -169,7 +225,7 @@ export default function Home() {
       </div>
 
       <p className="note">
-        デモモードの数値は固定値です。実測には <code>AI_GATEWAY_API_KEY</code> と
+        各fixtureで2モデルを並列実行し、Jev判断は両モデルで共有します。デモモードの数値は固定値です。実測には <code>AI_GATEWAY_API_KEY</code> と
         <code>TYPESAFE_API_KEY</code> の両方が必要です。
       </p>
     </main>

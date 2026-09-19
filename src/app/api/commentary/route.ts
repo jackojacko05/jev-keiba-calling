@@ -1,6 +1,7 @@
 import { choice, noul, score, TypeSafeClient } from "@typesafe-ai/sdk";
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
+import { getDefaultModels, isSupportedModel, MODEL_OPTIONS, type ModelId } from "@/lib/models";
 import type { RaceFrame } from "@/lib/race";
 
 export const runtime = "nodejs";
@@ -109,10 +110,10 @@ async function askJev(frame: RaceFrame) {
   };
 }
 
-async function narrate(frame: RaceFrame, decision?: JevDecision) {
+async function narrate(frame: RaceFrame, model: ModelId, decision?: JevDecision) {
   const startedAt = performance.now();
   const { text } = await generateText({
-    model: process.env.COMMENTARY_MODEL ?? "openai/gpt-6-astra",
+    model,
     instructions:
       "あなたは日本語の競馬実況者です。入力の事実だけを使い、馬名・馬番・順位を創作しないでください。出力は実況文1文のみ、45文字以内です。",
     prompt: JSON.stringify(
@@ -130,49 +131,66 @@ export async function GET() {
   return NextResponse.json({
     typesafe: Boolean(process.env.TYPESAFE_API_KEY),
     aiGateway: Boolean(process.env.AI_GATEWAY_API_KEY),
-    model: process.env.COMMENTARY_MODEL ?? "openai/gpt-6-astra",
+    defaultModels: getDefaultModels(),
+    models: MODEL_OPTIONS,
   });
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { frame?: unknown };
+    const body = (await request.json()) as { frame?: unknown; models?: unknown };
     if (!isRaceFrame(body.frame)) {
       return NextResponse.json({ error: "Invalid race frame" }, { status: 400 });
     }
+    if (
+      !Array.isArray(body.models) ||
+      body.models.length !== 2 ||
+      !body.models.every(isSupportedModel) ||
+      body.models[0] === body.models[1]
+    ) {
+      return NextResponse.json({ error: "異なる対応モデルを2つ選択してください。" }, { status: 400 });
+    }
 
     const frame = body.frame;
+    const models = body.models as [ModelId, ModelId];
     const live = Boolean(process.env.TYPESAFE_API_KEY && process.env.AI_GATEWAY_API_KEY);
     if (!live) {
       const decision = mockDecision(frame);
       return NextResponse.json({
         mode: "demo",
-        direct: { text: mockCommentary(frame, false), latencyMs: 820 },
-        jev: {
-          decision,
-          decisionLatencyMs: 118,
-          narrationLatencyMs: 640,
-          totalLatencyMs: 758,
-          text: mockCommentary(frame, true),
-        },
+        decision,
+        decisionLatencyMs: 118,
+        results: models.map((model, index) => ({
+          model,
+          direct: { text: mockCommentary(frame, false), latencyMs: 780 + index * 90 },
+          jev: {
+            narrationLatencyMs: 610 + index * 70,
+            totalLatencyMs: 728 + index * 70,
+            text: mockCommentary(frame, true),
+          },
+        })),
       });
     }
 
-    const directPromise = narrate(frame);
-    const jevResult = await askJev(frame);
-    const jevNarrationPromise = narrate(frame, jevResult.decision);
-    const [direct, jevNarration] = await Promise.all([directPromise, jevNarrationPromise]);
+    const directPromise = Promise.all(models.map((model) => narrate(frame, model)));
+    const [directResults, jevResult] = await Promise.all([directPromise, askJev(frame)]);
+    const jevNarrations = await Promise.all(
+      models.map((model) => narrate(frame, model, jevResult.decision)),
+    );
 
     return NextResponse.json({
       mode: "live",
-      direct,
-      jev: {
-        decision: jevResult.decision,
-        decisionLatencyMs: jevResult.latencyMs,
-        narrationLatencyMs: jevNarration.latencyMs,
-        totalLatencyMs: jevResult.latencyMs + jevNarration.latencyMs,
-        text: jevNarration.text,
-      },
+      decision: jevResult.decision,
+      decisionLatencyMs: jevResult.latencyMs,
+      results: models.map((model, index) => ({
+        model,
+        direct: directResults[index],
+        jev: {
+          narrationLatencyMs: jevNarrations[index].latencyMs,
+          totalLatencyMs: jevResult.latencyMs + jevNarrations[index].latencyMs,
+          text: jevNarrations[index].text,
+        },
+      })),
     });
   } catch (error) {
     console.error("Commentary benchmark failed", error);
