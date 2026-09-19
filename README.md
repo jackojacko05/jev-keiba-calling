@@ -1,5 +1,7 @@
 # Jev Keiba Calling
 
+[Live demo](https://jev-keiba-calling.vercel.app)（キー未設定のため固定値のデモモード）
+
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY,TYPESAFE_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20and%20TypeSafe%20API%20keys.%20The%20keys%20stay%20in%20your%20Vercel%20project.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-keys)
 
 同じ架空レース状態を入力し、次の2経路を比較する再現可能な実験環境です。
