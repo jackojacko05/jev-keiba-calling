@@ -133,6 +133,19 @@ function getYouTubeVideoId(input: string) {
   return null;
 }
 
+function getYouTubeStartSeconds(input: string) {
+  try {
+    const url = new URL(input.trim());
+    const raw = url.searchParams.get("t") ?? url.searchParams.get("start") ?? "0";
+    if (/^\d+$/.test(raw)) return Number(raw);
+    const match = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+    if (!match) return 0;
+    return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 function formatElapsed(ms: number) {
   return `${(ms / 1000).toFixed(1)}秒`;
 }
@@ -144,6 +157,7 @@ function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
 export default function YouTubeTranscriber() {
   const [url, setUrl] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoStartSeconds, setVideoStartSeconds] = useState(0);
   const [authorized, setAuthorized] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [rows, setRows] = useState<TimelineRow[]>([]);
@@ -187,6 +201,7 @@ export default function YouTubeTranscriber() {
       return;
     }
     setVideoId(id);
+    setVideoStartSeconds(getYouTubeStartSeconds(url));
     setRows([]);
     setError("");
     void loadVisionModels().catch((caught) => {
@@ -426,9 +441,9 @@ export default function YouTubeTranscriber() {
     }
   }
 
-  function sendYouTubeCommand(func: "playVideo" | "unMute") {
+  function sendYouTubeCommand(func: "playVideo" | "unMute" | "setOption", args: unknown[] = []) {
     youtubeIframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: "command", func, args: [] }),
+      JSON.stringify({ event: "command", func, args }),
       "https://www.youtube-nocookie.com",
     );
   }
@@ -558,6 +573,7 @@ export default function YouTubeTranscriber() {
       setVisionStatus("running");
       sendYouTubeCommand("unMute");
       sendYouTubeCommand("playVideo");
+      sendYouTubeCommand("setOption", ["captions", "track", {}]);
 
       displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
       visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
@@ -648,7 +664,7 @@ export default function YouTubeTranscriber() {
             <div className="video-wrap" ref={videoWrapRef}>
               <iframe
                 ref={youtubeIframeRef}
-                src={`https://www.youtube-nocookie.com/embed/${videoId}?playsinline=1&enablejsapi=1&rel=0&cc_load_policy=0`}
+                src={`https://www.youtube-nocookie.com/embed/${videoId}?playsinline=1&enablejsapi=1&rel=0&cc_load_policy=0${videoStartSeconds ? `&start=${videoStartSeconds}` : ""}`}
                 title="YouTube video player"
                 allow="autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
@@ -710,7 +726,7 @@ export default function YouTubeTranscriber() {
               </div>
               <small className="capture-status">
                 {analyzing
-                  ? `連続認識中・取得 ${capturedCount}/${maxSamples}・API処理中 ${inFlightCount}件`
+                  ? `連続認識中・取得 ${capturedCount}/${maxSamples}・API処理中 ${inFlightCount}件・CV ${visionStatus}`
                   : rows.length
                     ? `${rows.length}フレームの解析完了`
                     : `${SAMPLING_MODES[samplingMode].label}・最大${maxSamples}フレーム`}

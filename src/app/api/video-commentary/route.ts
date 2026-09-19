@@ -113,7 +113,7 @@ async function extractVisualState(
     schema: frameAnalysisSchema,
     schemaName: "horse_race_frame_analysis",
     system:
-      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。名簿は馬番と馬名の対応表であり、着順情報ではありません。ゼッケンの馬番が画像ではっきり読め、名簿と一致した場合だけ馬名を使ってください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
+      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。名簿は馬番と馬名の対応表であり、着順情報ではありません。ゼッケンの馬番が画像ではっきり読め、名簿と一致した場合だけ馬名を使い、visibleHorsesへ入れてください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。visibleHorsesに信頼度0.7以上の馬がいれば、最大2頭まで『16番ウインカーネリアン』のように馬番と馬名を優先して呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
     messages: [
       {
         role: "user",
@@ -198,7 +198,7 @@ async function narrate(state: VisualState, decision?: JevDecision) {
   const { text } = await generateText({
     model: COMMENTARY_MODEL,
     instructions:
-      "あなたは日本語の競馬実況者です。与えられた視覚解析の事実だけを使い、馬名・馬番・順位を創作しないでください。騎手動作は信頼度0.65以上の場合だけ触れ、断定ではなく観察表現にしてください。『確認』『判別』『映像では』など解析作業を説明する語を避け、レースの変化を現在形で伝えてください。出力は実況文1文のみ、45文字以内です。",
+      "あなたは日本語の競馬実況者です。与えられた視覚解析の事実だけを使い、馬名・馬番・順位を創作しないでください。visibleHorsesに信頼度0.7以上の馬がいれば最大2頭まで馬番と馬名で呼び、Jevが選んだ重要イベントへ焦点を絞ってください。deliveryがbriefなら簡潔に、callなら動きを強調し、climaxなら先頭争いを力強く伝えてください。騎手動作は信頼度0.65以上の場合だけ触れ、断定ではなく観察表現にしてください。『確認』『判別』『映像では』など解析作業を説明する語を避け、レースの変化を現在形で伝えてください。出力は実況文1文のみ、45文字以内です。",
     prompt: JSON.stringify(
       decision
         ? { task: "Jevの判断を優先して実況する", visualState: state, jevDecision: decision }
@@ -278,9 +278,19 @@ export async function POST(request: Request) {
       parsedRaceContext.success ? parsedRaceContext.data : null,
     );
     const jevResult = await askJev(vision.state);
-    const spoken = jevResult.decision.delivery !== "hold" &&
+    const decisiveEvent =
+      (jevResult.decision.event === "start_break" && vision.state.phase === "スタート") ||
+      ["lead_change", "rapid_close", "finish"].includes(jevResult.decision.event);
+    const periodicBeat =
+      body.elapsedMs >= 3_000 &&
+      body.elapsedMs % 3_000 < 1_000 &&
+      vision.state.phase !== "不明" &&
+      jevResult.decision.event !== "uncertain";
+    const spoken = decisiveEvent || periodicBeat || (
+      jevResult.decision.delivery !== "hold" &&
       jevResult.decision.speakNow >= 0.5 &&
-      (vision.state.shouldSpeak || jevResult.decision.urgency >= 1);
+      (vision.state.shouldSpeak || jevResult.decision.urgency >= 1)
+    );
     const assisted = spoken
       ? await narrate(vision.state, jevResult.decision)
       : { text: "", latencyMs: 0 };
