@@ -320,6 +320,7 @@ export async function POST(request: Request) {
       : null;
     if (
       body.previousImage !== undefined &&
+      body.previousImage !== null &&
       (!previousMatch || Buffer.byteLength(previousMatch[1], "base64") > MAX_IMAGE_BYTES)
     ) {
       return NextResponse.json({ error: "直前フレームの形式またはサイズが不正です。" }, { status: 400 });
