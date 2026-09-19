@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { RACE_FRAMES, type RaceFrame } from "@/lib/race";
+import YouTubeTranscriber from "./youtube-transcriber";
 
 type Result = {
   mode: "demo" | "live";
@@ -92,6 +93,8 @@ export default function Home() {
         </div>
         <span className={live ? "live" : "demo"}>{live ? "LIVE API" : "DEMO MODE"}</span>
       </header>
+
+      <YouTubeTranscriber />
 
       <section className="settings">
         <dl>

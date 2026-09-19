@@ -39,9 +39,28 @@ code { padding: 2px 5px; border-radius: 3px; background: #eeeeea; font-family: v
 .note { margin-top: 16px; line-height: 1.8; }
 .note code { margin: 0 4px; }
 .error { padding: 12px; background: #fee2e2; color: #991b1b; font-size: 13px; }
+.youtube-tool { margin-bottom: 18px; padding: 18px; border: 1px solid #d4d4cf; background: white; }
+.youtube-tool h2 { margin: 0 0 6px; font-size: 18px; }
+.description { margin: 0 0 14px; color: #666; font-size: 13px; line-height: 1.6; }
+.url-row { display: flex; gap: 8px; }
+.url-row input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid #aaa; border-radius: 5px; font: 13px var(--font-geist-mono); }
+.youtube-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 16px; margin-top: 16px; }
+.video-wrap { position: relative; aspect-ratio: 16 / 9; background: #111; }
+.video-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.transcript-panel { padding: 14px; border: 1px solid #ddd; background: #fafafa; }
+.rights-check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.5; }
+.rights-check input { margin-top: 3px; }
+.transcript-panel ol { padding-left: 20px; color: #666; font-size: 12px; line-height: 1.7; }
+.capture-actions { margin-top: 12px; }
+.capture-actions .stop { border-color: #991b1b; background: #991b1b; }
+.transcript-result { margin-top: 14px; padding-top: 14px; border-top: 1px solid #ddd; }
+.transcript-result strong { font: 700 10px var(--font-geist-mono); }
+.transcript-result p { white-space: pre-wrap; font-size: 13px; line-height: 1.7; }
+.transcript-result small { color: #777; font: 500 10px var(--font-geist-mono); }
 
 @media (max-width: 720px) {
   main { padding: 28px 14px; }
   header, .settings { flex-direction: column; align-items: stretch; }
   .actions button { flex: 1; }
+  .url-row, .youtube-workspace { display: flex; flex-direction: column; }
 }
