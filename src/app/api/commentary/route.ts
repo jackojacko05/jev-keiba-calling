@@ -1,10 +1,11 @@
-import { choice, noul, score, TypeSafeClient } from "@typesafe-ai/sdk";
-import { generateText } from "ai";
+import { experimental_evaluate as evaluate, generateText } from "ai";
 import { NextResponse } from "next/server";
-import { getDefaultModels, isSupportedModel, MODEL_OPTIONS, type ModelId } from "@/lib/models";
 import type { RaceFrame } from "@/lib/race";
 
 export const runtime = "nodejs";
+
+const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "openai/gpt-5-mini";
+const JEV_MODEL = "typesafe-ai/jev";
 
 type JevDecision = {
   focus: string;
@@ -71,49 +72,82 @@ function mockCommentary(frame: RaceFrame, assisted: boolean) {
   return `${frame.phase}、${frame.facts.join("。")}。`;
 }
 
+function selectedProbability(
+  probabilities: Record<string, number> | undefined,
+  selected: string,
+) {
+  return probabilities?.[selected] ?? 0;
+}
+
+function highestProbability(probabilities: Record<string, number> | undefined) {
+  const values = Object.values(probabilities ?? {});
+  return values.length ? Math.max(...values) : 0;
+}
+
 async function askJev(frame: RaceFrame) {
-  const horseOptions = Object.fromEntries(
+  const horseCriteria = Object.fromEntries(
     frame.horses.map((horse) => [
       `horse_${horse.number}`,
       `${horse.number}番 ${horse.name}（${horse.position}番手、勢い: ${horse.momentum}）`,
     ]),
   );
   const startedAt = performance.now();
-  const client = new TypeSafeClient();
-  const response = await client.systemOne({
-    state: frame,
+  const response = await evaluate({
+    model: JEV_MODEL,
+    state: JSON.stringify(frame),
     questions: {
-      focus: choice("この瞬間、実況で最も注目すべき馬を1頭選ぶ", horseOptions),
-      event: choice("現在起きている最重要イベントを1つ選ぶ", EVENT_OPTIONS),
-      urgency: score("この状態を今すぐ実況で強調する必要性", [
-        "低い。大きな変化はなく静観できる",
-        "中程度。短く状況を更新する",
-        "高い。勝負を左右する変化として直ちに強調する",
-      ]),
-      speakNow: noul("この瞬間に新しい実況文を出すべきである"),
+      focus: {
+        type: "choice",
+        instructions: "この瞬間、実況で最も注目すべき馬を1頭選ぶ",
+        criteria: horseCriteria,
+      },
+      event: {
+        type: "choice",
+        instructions: "現在起きている最重要イベントを1つ選ぶ",
+        criteria: EVENT_OPTIONS,
+      },
+      urgency: {
+        type: "score",
+        instructions: "この状態を今すぐ実況で強調する必要性",
+        criteria: [
+          "低い。大きな変化はなく静観できる",
+          "中程度。短く状況を更新する",
+          "高い。勝負を左右する変化として直ちに強調する",
+        ],
+      },
+      speakNow: {
+        type: "boolean",
+        instructions: "この瞬間に新しい実況文を出すべきである",
+      },
     },
   });
+
+  const focus = response.answers.focus;
+  const event = response.answers.event;
+  const urgency = response.answers.urgency;
+  const speakNow = response.answers.speakNow;
+  const confidence = Math.min(
+    selectedProbability(focus.probabilities, focus.choice),
+    selectedProbability(event.probabilities, event.choice),
+    highestProbability(urgency.probabilities),
+  );
 
   return {
     latencyMs: Math.round(performance.now() - startedAt),
     decision: {
-      focus: response.answers.focus.choice,
-      event: response.answers.event.choice,
-      urgency: response.answers.urgency.score,
-      speakNow: response.answers.speakNow.noul,
-      confidence: Math.min(
-        response.answers.focus.confidence,
-        response.answers.event.confidence,
-        response.answers.urgency.confidence,
-      ),
+      focus: focus.choice,
+      event: event.choice,
+      urgency: urgency.score,
+      speakNow: speakNow.probability,
+      confidence,
     } satisfies JevDecision,
   };
 }
 
-async function narrate(frame: RaceFrame, model: ModelId, decision?: JevDecision) {
+async function narrate(frame: RaceFrame, decision?: JevDecision) {
   const startedAt = performance.now();
   const { text } = await generateText({
-    model,
+    model: COMMENTARY_MODEL,
     instructions:
       "あなたは日本語の競馬実況者です。入力の事実だけを使い、馬名・馬番・順位を創作しないでください。出力は実況文1文のみ、45文字以内です。",
     prompt: JSON.stringify(
@@ -129,73 +163,54 @@ async function narrate(frame: RaceFrame, model: ModelId, decision?: JevDecision)
 
 export async function GET() {
   return NextResponse.json({
-    typesafe: Boolean(process.env.TYPESAFE_API_KEY),
     aiGateway: Boolean(process.env.AI_GATEWAY_API_KEY),
-    defaultModels: getDefaultModels(),
-    models: MODEL_OPTIONS,
+    commentaryModel: COMMENTARY_MODEL,
+    jevModel: JEV_MODEL,
   });
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { frame?: unknown; models?: unknown };
+    const body = (await request.json()) as { frame?: unknown };
     if (!isRaceFrame(body.frame)) {
       return NextResponse.json({ error: "Invalid race frame" }, { status: 400 });
     }
-    if (
-      !Array.isArray(body.models) ||
-      body.models.length !== 2 ||
-      !body.models.every(isSupportedModel) ||
-      body.models[0] === body.models[1]
-    ) {
-      return NextResponse.json({ error: "異なる対応モデルを2つ選択してください。" }, { status: 400 });
-    }
 
     const frame = body.frame;
-    const models = body.models as [ModelId, ModelId];
-    const live = Boolean(process.env.TYPESAFE_API_KEY && process.env.AI_GATEWAY_API_KEY);
-    if (!live) {
+    if (!process.env.AI_GATEWAY_API_KEY) {
       const decision = mockDecision(frame);
       return NextResponse.json({
         mode: "demo",
-        decision,
-        decisionLatencyMs: 118,
-        results: models.map((model, index) => ({
-          model,
-          direct: { text: mockCommentary(frame, false), latencyMs: 780 + index * 90 },
-          jev: {
-            narrationLatencyMs: 610 + index * 70,
-            totalLatencyMs: 728 + index * 70,
-            text: mockCommentary(frame, true),
-          },
-        })),
+        direct: { text: mockCommentary(frame, false), latencyMs: 820 },
+        jev: {
+          decision,
+          decisionLatencyMs: 118,
+          narrationLatencyMs: 640,
+          totalLatencyMs: 758,
+          text: mockCommentary(frame, true),
+        },
       });
     }
 
-    const directPromise = Promise.all(models.map((model) => narrate(frame, model)));
-    const [directResults, jevResult] = await Promise.all([directPromise, askJev(frame)]);
-    const jevNarrations = await Promise.all(
-      models.map((model) => narrate(frame, model, jevResult.decision)),
-    );
+    const directPromise = narrate(frame);
+    const [direct, jevResult] = await Promise.all([directPromise, askJev(frame)]);
+    const jevNarration = await narrate(frame, jevResult.decision);
 
     return NextResponse.json({
       mode: "live",
-      decision: jevResult.decision,
-      decisionLatencyMs: jevResult.latencyMs,
-      results: models.map((model, index) => ({
-        model,
-        direct: directResults[index],
-        jev: {
-          narrationLatencyMs: jevNarrations[index].latencyMs,
-          totalLatencyMs: jevResult.latencyMs + jevNarrations[index].latencyMs,
-          text: jevNarrations[index].text,
-        },
-      })),
+      direct,
+      jev: {
+        decision: jevResult.decision,
+        decisionLatencyMs: jevResult.latencyMs,
+        narrationLatencyMs: jevNarration.latencyMs,
+        totalLatencyMs: jevResult.latencyMs + jevNarration.latencyMs,
+        text: jevNarration.text,
+      },
     });
   } catch (error) {
     console.error("Commentary benchmark failed", error);
     return NextResponse.json(
-      { error: "実行に失敗しました。環境変数とAPIの利用状況を確認してください。" },
+      { error: "実行に失敗しました。AI Gatewayの残高・キー・モデル設定を確認してください。" },
       { status: 502 },
     );
   }

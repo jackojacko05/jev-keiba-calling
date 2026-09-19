@@ -1,65 +1,47 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FALLBACK_MODELS, MODEL_OPTIONS, type ModelId } from "@/lib/models";
 import { RACE_FRAMES, type RaceFrame } from "@/lib/race";
 import YouTubeTranscriber from "./youtube-transcriber";
 
-type Decision = {
-  focus: string;
-  event: string;
-  urgency: number;
-  speakNow: number;
-  confidence: number;
-};
-
-type ModelResult = {
-  model: ModelId;
+type Result = {
+  mode: "demo" | "live";
   direct: { text: string; latencyMs: number };
   jev: {
     text: string;
+    decisionLatencyMs: number;
     narrationLatencyMs: number;
     totalLatencyMs: number;
+    decision: {
+      focus: string;
+      event: string;
+      urgency: number;
+      speakNow: number;
+      confidence: number;
+    };
   };
 };
 
-type BenchmarkResponse = {
-  mode: "demo" | "live";
-  decision: Decision;
-  decisionLatencyMs: number;
-  results: ModelResult[];
-};
-
-type Row = ModelResult & {
-  mode: "demo" | "live";
-  decision: Decision;
-  decisionLatencyMs: number;
-  frame: RaceFrame;
-  runAt: string;
-};
+type Row = Result & { frame: RaceFrame; runAt: string };
 type Status = {
-  typesafe: boolean;
   aiGateway: boolean;
-  defaultModels: [ModelId, ModelId];
+  commentaryModel: string;
+  jevModel: string;
 };
 
 const DEPLOY_URL =
-  "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY,TYPESAFE_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20and%20TypeSafe%20API%20keys.%20The%20keys%20stay%20in%20your%20Vercel%20project.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-keys";
+  "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling&env=AI_GATEWAY_API_KEY&envDescription=Enter%20your%20own%20Vercel%20AI%20Gateway%20key.%20Both%20the%20commentary%20model%20and%20Jev%20run%20through%20AI%20Gateway.&envLink=https%3A%2F%2Fgithub.com%2Fjackojacko05%2Fjev-keiba-calling%23api-key";
 
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
-  const [models, setModels] = useState<[ModelId, ModelId]>([...FALLBACK_MODELS]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/commentary")
       .then((response) => response.json())
-      .then((data: Status) => {
-        setStatus(data);
-        setModels(data.defaultModels);
-      })
+      .then((data: Status) => setStatus(data))
       .catch(() => setStatus(null));
   }, []);
 
@@ -73,23 +55,15 @@ export default function Home() {
         const response = await fetch("/api/commentary", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frame, models }),
+          body: JSON.stringify({ frame }),
         });
-        const result = (await response.json()) as BenchmarkResponse | { error: string };
+        const result = (await response.json()) as Result | { error: string };
         if (!response.ok || "error" in result) {
           throw new Error("error" in result ? result.error : "実行に失敗しました");
         }
-        const runAt = new Date().toISOString();
         setRows((current) => [
           ...current,
-          ...result.results.map((modelResult) => ({
-            ...modelResult,
-            mode: result.mode,
-            decision: result.decision,
-            decisionLatencyMs: result.decisionLatencyMs,
-            frame,
-            runAt,
-          })),
+          { ...result, frame, runAt: new Date().toISOString() },
         ]);
       }
     } catch (caught) {
@@ -101,9 +75,11 @@ export default function Home() {
 
   function downloadJson() {
     const payload = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       exportedAt: new Date().toISOString(),
-      models,
+      comparison: "same-model-without-jev-vs-with-jev",
+      commentaryModel: status?.commentaryModel,
+      jevModel: status?.jevModel,
       results: rows,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -115,22 +91,14 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  const live = Boolean(status?.typesafe && status?.aiGateway);
-  const duplicateModels = models[0] === models[1];
-  const totalRuns = RACE_FRAMES.length * 2;
-
-  function setModel(index: 0 | 1, model: ModelId) {
-    setModels((current) => index === 0 ? [model, current[1]] : [current[0], model]);
-    setRows([]);
-    setError("");
-  }
+  const live = Boolean(status?.aiGateway);
 
   return (
     <main>
       <header>
         <div>
           <h1>Jev Keiba Calling</h1>
-          <p>同一の架空レース状態で「LLM直接実況」と「Jev判断＋同じLLM」を比較します。</p>
+          <p>同じ固定LLMを「Jevなし」と「Jevあり」で比較します。すべてVercel AI Gateway経由です。</p>
         </div>
         <div className="header-actions">
           <a className="deploy-link" href={DEPLOY_URL} target="_blank" rel="noreferrer">
@@ -143,30 +111,15 @@ export default function Home() {
       <YouTubeTranscriber />
 
       <section className="settings">
-        <div className="model-controls">
-          {([0, 1] as const).map((index) => (
-            <label key={index}>
-              モデル {index === 0 ? "A" : "B"}
-              <select
-                value={models[index]}
-                onChange={(event) => setModel(index, event.target.value as ModelId)}
-                disabled={running}
-              >
-                {MODEL_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          ))}
-        </div>
         <dl>
-          <div><dt>Jev</dt><dd>{status?.typesafe ? "接続済み" : "未設定"}</dd></div>
-          <div><dt>AI Gateway</dt><dd>{status?.aiGateway ? "接続済み" : "未設定"}</dd></div>
-          <div><dt>Runs</dt><dd>{RACE_FRAMES.length} fixtures × 2 models</dd></div>
+          <div><dt>Gateway</dt><dd>{status?.aiGateway ? "接続済み" : "未設定"}</dd></div>
+          <div><dt>固定LLM</dt><dd>{status?.commentaryModel ?? "確認中"}</dd></div>
+          <div><dt>Jev</dt><dd>{status?.jevModel ?? "確認中"}</dd></div>
+          <div><dt>Fixtures</dt><dd>{RACE_FRAMES.length}</dd></div>
         </dl>
         <div className="actions">
-          <button onClick={runBenchmark} disabled={running || duplicateModels}>
-            {running ? `実行中 ${rows.length}/${totalRuns}` : "2モデルを同時実行"}
+          <button onClick={runBenchmark} disabled={running}>
+            {running ? `実行中 ${rows.length}/${RACE_FRAMES.length}` : "Jevあり／なしを比較"}
           </button>
           <button className="secondary" onClick={downloadJson} disabled={!rows.length || running}>
             結果JSONを保存
@@ -174,7 +127,6 @@ export default function Home() {
         </div>
       </section>
 
-      {duplicateModels && <p className="error">異なるモデルを2つ選択してください。</p>}
       {error && <p className="error">{error}</p>}
 
       <div className="table-wrap">
@@ -182,29 +134,27 @@ export default function Home() {
           <thead>
             <tr>
               <th>時刻 / 状態</th>
-              <th>モデル</th>
-              <th>LLM直接実況</th>
-              <th>Jev判断</th>
-              <th>Jev経由実況</th>
+              <th>固定LLM・Jevなし</th>
+              <th>Jevの判断</th>
+              <th>固定LLM・Jevあり</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.frame.id}-${row.model}`}>
+              <tr key={row.frame.id}>
                 <td>
                   <strong>{row.frame.elapsedSeconds}秒・{row.frame.phase}</strong>
                   <small>{row.frame.facts.join(" / ")}</small>
                 </td>
-                <td><code>{row.model}</code></td>
                 <td>
                   {row.direct.text}
                   <small>{row.direct.latencyMs} ms</small>
                 </td>
                 <td>
-                  <code>{row.decision.event}</code>
+                  <code>{row.jev.decision.event}</code>
                   <small>
-                    focus={row.decision.focus}, confidence={row.decision.confidence.toFixed(3)}<br />
-                    shared Jev {row.decisionLatencyMs} ms
+                    focus={row.jev.decision.focus}, confidence={row.jev.decision.confidence.toFixed(3)}<br />
+                    Jev {row.jev.decisionLatencyMs} ms
                   </small>
                 </td>
                 <td>
@@ -215,8 +165,8 @@ export default function Home() {
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={5} className="empty">
-                  2モデルを選び、同じJev判断と固定fixtureで並列評価します。
+                <td colSpan={4} className="empty">
+                  同じfixtureと固定LLMで、Jevを挟む効果だけを比較します。
                 </td>
               </tr>
             )}
@@ -225,8 +175,8 @@ export default function Home() {
       </div>
 
       <p className="note">
-        各fixtureで2モデルを並列実行し、Jev判断は両モデルで共有します。デモモードの数値は固定値です。実測には <code>AI_GATEWAY_API_KEY</code> と
-        <code>TYPESAFE_API_KEY</code> の両方が必要です。
+        生成は <code>{status?.commentaryModel ?? "固定LLM"}</code>、判断は <code>typesafe-ai/jev</code>。
+        どちらも同じ <code>AI_GATEWAY_API_KEY</code> を使用します。デモモードの数値は固定値です。
       </p>
     </main>
   );
