@@ -6,7 +6,7 @@ import { groundNarration } from "@/lib/commentary-grounding";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "google/gemini-3.5-flash-lite";
+const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "openai/gpt-4.1-mini";
 const JEV_MODEL = "typesafe-ai/jev";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -113,6 +113,7 @@ function highestProbability(probabilities: Record<string, number> | undefined) {
 
 async function extractVisualState(
   imageBase64: string,
+  previousImageBase64: string | null,
   previousState: VisualState | null,
   browserVision: z.infer<typeof browserVisionSchema> | null,
   raceContext: z.infer<typeof raceContextSchema> | null,
@@ -123,7 +124,7 @@ async function extractVisualState(
     schema: frameAnalysisSchema,
     schemaName: "horse_race_frame_analysis",
     system:
-      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。馬名や出走名簿は与えられていません。まず先頭争いと隊列を観察し、次にゼッケンを拡大して数字を読みます。ゼッケンの数字を一桁ずつ明確に視認できた馬だけvisibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。馬を特定できる場合も馬名を作らず『16番』のように馬番だけで呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
+      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。馬名や出走名簿は与えられていません。2枚ある場合は1枚目が直前、2枚目が現在です。まず両画像の馬群・カメラ位置・進行方向を比較して位置変化を捉え、次に現在画像のゼッケンを拡大して数字を読みます。画面の左右だけを根拠に先頭・順位・内外を決めてはいけません。先頭は、進行方向と前後関係が画像間で明瞭な場合だけ述べてください。ゼッケンの数字を一桁ずつ明確に視認できた馬だけvisibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。速度・距離・順位表示など放送グラフィックの数字を馬番として扱わないでください。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。馬を特定できる場合も馬名を作らず『16番』のように馬番だけで呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
     messages: [
       {
         role: "user",
@@ -144,6 +145,13 @@ async function extractVisualState(
               browserVision,
             }),
           },
+          ...(previousImageBase64
+            ? [
+                { type: "text" as const, text: "直前フレーム" },
+                { type: "file" as const, data: previousImageBase64, mediaType: "image/jpeg" as const },
+              ]
+            : []),
+          { type: "text", text: "現在フレーム" },
           { type: "file", data: imageBase64, mediaType: "image/jpeg" },
         ],
       },
@@ -293,6 +301,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       image?: unknown;
+      previousImage?: unknown;
       elapsedMs?: unknown;
       previousState?: unknown;
       browserVision?: unknown;
@@ -306,6 +315,15 @@ export async function POST(request: Request) {
     if (!match || Buffer.byteLength(match[1], "base64") > MAX_IMAGE_BYTES) {
       return NextResponse.json({ error: "映像フレームの形式またはサイズが不正です。" }, { status: 400 });
     }
+    const previousMatch = typeof body.previousImage === "string"
+      ? body.previousImage.match(/^data:image\/jpeg;base64,(.+)$/)
+      : null;
+    if (
+      body.previousImage !== undefined &&
+      (!previousMatch || Buffer.byteLength(previousMatch[1], "base64") > MAX_IMAGE_BYTES)
+    ) {
+      return NextResponse.json({ error: "直前フレームの形式またはサイズが不正です。" }, { status: 400 });
+    }
 
     if (!process.env.AI_GATEWAY_API_KEY) {
       return NextResponse.json(demoResult(body.elapsedMs));
@@ -316,6 +334,7 @@ export async function POST(request: Request) {
     const parsedRaceContext = raceContextSchema.safeParse(body.raceContext);
     const vision = await extractVisualState(
       match[1],
+      previousMatch?.[1] ?? null,
       parsedPrevious.success ? parsedPrevious.data : null,
       parsedBrowserVision.success ? parsedBrowserVision.data : null,
       parsedRaceContext.success ? parsedRaceContext.data : null,

@@ -195,6 +195,7 @@ export default function YouTubeTranscriber() {
   const previousPoseVectorRef = useRef<number[] | null>(null);
   const commentaryFeedRef = useRef<HTMLDivElement | null>(null);
   const abortControllersRef = useRef<Set<AbortController>>(new Set());
+  const previousImageRef = useRef<string | null>(null);
 
   function loadVideo() {
     const id = getYouTubeVideoId(url);
@@ -474,6 +475,8 @@ export default function YouTubeTranscriber() {
     try {
       const canvas = captureVideoCanvas();
       const image = canvasToJpeg(canvas);
+      const previousImage = previousImageRef.current;
+      previousImageRef.current = image;
       const browserVision = useBrowserCv ? liveVisionRef.current : null;
       controller = new AbortController();
       abortControllersRef.current.add(controller);
@@ -483,6 +486,7 @@ export default function YouTubeTranscriber() {
         signal: controller.signal,
         body: JSON.stringify({
           image,
+          previousImage,
           elapsedMs: capturedElapsedMs,
           previousState: previousStateRef.current,
           browserVision,
@@ -537,6 +541,7 @@ export default function YouTubeTranscriber() {
     setError("");
     setRows([]);
     previousStateRef.current = null;
+    previousImageRef.current = null;
     sampleCountRef.current = 0;
     setCapturedCount(0);
     inFlightCountRef.current = 0;
@@ -602,7 +607,7 @@ export default function YouTubeTranscriber() {
 
   function downloadJson() {
     const payload = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       exportedAt: new Date().toISOString(),
       source: "youtube-visual-frames-no-audio",
       videoId,
