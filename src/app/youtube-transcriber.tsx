@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { parseRaceDescription, type RaceContext } from "@/lib/race-context";
 
 type VisualState = {
   phase: string;
@@ -15,6 +16,14 @@ type VisualState = {
   jockeyAction: string;
   jockeyActionConfidence: number;
   jockeyActionEvidence: string;
+  cameraShot: string;
+  visibleHorses: Array<{
+    number: number;
+    horseName: string;
+    screenPosition: string;
+    movement: string;
+    confidence: number;
+  }>;
 };
 
 type BrowserVision = {
@@ -29,10 +38,6 @@ type BrowserVision = {
   confidence: number;
 };
 
-type RaceContext = {
-  entrants: Array<{ number: number; horseName: string; jockey?: string }>;
-};
-
 type VideoResult = {
   mode: "demo" | "live";
   visualState: VisualState;
@@ -41,10 +46,12 @@ type VideoResult = {
   jev: {
     decision: {
       event: string;
+      delivery: string;
       urgency: number;
       speakNow: number;
       confidence: number;
     };
+    spoken: boolean;
     decisionLatencyMs: number;
     narrationLatencyMs: number;
     text: string;
@@ -83,9 +90,21 @@ type CurrentTabDisplayMediaOptions = DisplayMediaStreamOptions & {
   surfaceSwitching: "include";
 };
 
-const SAMPLE_INTERVAL_MS = 3_000;
+type SamplingMode = "economy" | "balanced" | "one-second";
+
+const SAMPLING_MODES: Record<SamplingMode, {
+  label: string;
+  low: number;
+  medium: number;
+  high: number;
+  concurrency: number;
+}> = {
+  economy: { label: "節約（変化時2〜4秒）", low: 4_000, medium: 3_000, high: 2_000, concurrency: 2 },
+  balanced: { label: "標準（変化時1〜3秒）", low: 3_000, medium: 1_800, high: 1_000, concurrency: 3 },
+  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 4 },
+};
 const VISION_INTERVAL_MS = 350;
-const MAX_SAMPLES = 10;
+const SCHEDULER_INTERVAL_MS = 250;
 
 const EMPTY_VISION: BrowserVision = {
   horseCount: 0,
@@ -98,16 +117,6 @@ const EMPTY_VISION: BrowserVision = {
   riderMotionHint: "unknown",
   confidence: 0,
 };
-
-const SPOILER_MARKERS = [
-  /レース結果/,
-  /着順/,
-  /払戻/,
-  /配当/,
-  /確定結果/,
-  /勝ち馬/,
-  /上位(?:3|３)頭/,
-];
 
 function getYouTubeVideoId(input: string) {
   try {
@@ -128,42 +137,6 @@ function formatElapsed(ms: number) {
   return `${(ms / 1000).toFixed(1)}秒`;
 }
 
-function parseRaceDescription(input: string) {
-  const entrants = new Map<number, RaceContext["entrants"][number]>();
-  const lines = input.split(/\r?\n/);
-  let removedLines = 0;
-  let resultSection = false;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    if (SPOILER_MARKERS.some((marker) => marker.test(line))) {
-      resultSection = true;
-      removedLines += 1;
-      continue;
-    }
-    if (resultSection || /(?:^|\s)[１-３1-3]着(?:\s|[:：]|$)/.test(line)) {
-      removedLines += 1;
-      continue;
-    }
-
-    const explicit = line.match(
-      /(?:\d{1,2}枠\s*)?(\d{1,2})番(?:馬)?\s*[:：・\-－]?\s*([^\s　/／|｜（(]+)(?:[\s　/／|｜]+(?:騎手\s*[:：]?\s*)?([^\s　/／|｜（(]+))?/,
-    );
-    if (!explicit) continue;
-    const number = Number(explicit[1]);
-    const horseName = explicit[2]?.trim();
-    const jockey = explicit[3]?.trim();
-    if (!number || !horseName || SPOILER_MARKERS.some((marker) => marker.test(horseName))) continue;
-    entrants.set(number, { number, horseName, ...(jockey ? { jockey } : {}) });
-  }
-
-  return {
-    context: { entrants: [...entrants.values()].sort((a, b) => a.number - b.number) },
-    removedLines,
-  };
-}
-
 function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -178,19 +151,27 @@ export default function YouTubeTranscriber() {
   const [description, setDescription] = useState("");
   const [raceContext, setRaceContext] = useState<RaceContext>({ entrants: [] });
   const [removedSpoilerLines, setRemovedSpoilerLines] = useState(0);
+  const [samplingMode, setSamplingMode] = useState<SamplingMode>("balanced");
+  const [maxSamples, setMaxSamples] = useState(15);
   const [visionStatus, setVisionStatus] = useState<"idle" | "loading" | "ready" | "running">("idle");
   const [liveVision, setLiveVision] = useState<BrowserVision>(EMPTY_VISION);
-  const [pendingElapsedMs, setPendingElapsedMs] = useState<number | null>(null);
+  const [latestCapturedElapsedMs, setLatestCapturedElapsedMs] = useState<number | null>(null);
+  const [inFlightCount, setInFlightCount] = useState(0);
+  const [capturedCount, setCapturedCount] = useState(0);
 
   const videoWrapRef = useRef<HTMLDivElement | null>(null);
   const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const captureVideoRef = useRef<HTMLVideoElement | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeRef = useRef(false);
   const startedAtRef = useRef(0);
   const sampleCountRef = useRef(0);
+  const inFlightCountRef = useRef(0);
+  const lastCaptureAtRef = useRef(0);
+  const latestStateElapsedRef = useRef(-1);
+  const consecutiveErrorsRef = useRef(0);
   const previousStateRef = useRef<VisualState | null>(null);
   const objectDetectorRef = useRef<ObjectDetector | null>(null);
   const poseDetectorRef = useRef<PoseDetector | null>(null);
@@ -217,7 +198,7 @@ export default function YouTubeTranscriber() {
   function parseDescription() {
     const parsed = parseRaceDescription(description);
     setRaceContext(parsed.context);
-    setRemovedSpoilerLines(parsed.removedLines);
+    setRemovedSpoilerLines(parsed.removedSpoilerSegments);
     if (!parsed.context.entrants.length) {
       setError("馬番と馬名を抽出できませんでした。「1番 馬名 騎手」の形式も確認してください。");
       return;
@@ -227,7 +208,7 @@ export default function YouTubeTranscriber() {
 
   function releaseCapture() {
     activeRef.current = false;
-    if (timerRef.current) clearTimeout(timerRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
     if (visionTimerRef.current) clearTimeout(visionTimerRef.current);
     timerRef.current = null;
     visionTimerRef.current = null;
@@ -236,7 +217,7 @@ export default function YouTubeTranscriber() {
     if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     captureVideoRef.current = null;
     setAnalyzing(false);
-    setPendingElapsedMs(null);
+    setLatestCapturedElapsedMs(null);
     setVisionStatus(objectDetectorRef.current ? "ready" : "idle");
   }
 
@@ -448,15 +429,25 @@ export default function YouTubeTranscriber() {
     );
   }
 
-  async function analyzeNextFrame() {
-    if (!activeRef.current || sampleCountRef.current >= MAX_SAMPLES) {
-      releaseCapture();
-      return;
-    }
+  function currentSampleInterval() {
+    const mode = SAMPLING_MODES[samplingMode];
+    if (samplingMode === "one-second") return mode.high;
+    if (liveVisionRef.current.motionLevel === "high") return mode.high;
+    if (liveVisionRef.current.motionLevel === "medium") return mode.medium;
+    return mode.low;
+  }
 
+  async function analyzeFrame() {
+    if (!activeRef.current || sampleCountRef.current >= maxSamples) return;
     const captureStartedAt = performance.now();
     const capturedElapsedMs = Math.round(captureStartedAt - startedAtRef.current);
-    setPendingElapsedMs(capturedElapsedMs);
+    const rowId = sampleCountRef.current + 1;
+    sampleCountRef.current = rowId;
+    setCapturedCount(rowId);
+    lastCaptureAtRef.current = captureStartedAt;
+    inFlightCountRef.current += 1;
+    setInFlightCount(inFlightCountRef.current);
+    setLatestCapturedElapsedMs(capturedElapsedMs);
 
     try {
       const canvas = captureVideoCanvas();
@@ -478,33 +469,39 @@ export default function YouTubeTranscriber() {
         throw new Error("error" in result ? result.error : "映像解析に失敗しました。");
       }
 
-      previousStateRef.current = result.visualState;
-      sampleCountRef.current += 1;
-      setPendingElapsedMs(null);
-      setRows((current) => [
-        ...current,
-        {
+      if (capturedElapsedMs > latestStateElapsedRef.current) {
+        previousStateRef.current = result.visualState;
+        latestStateElapsedRef.current = capturedElapsedMs;
+      }
+      consecutiveErrorsRef.current = 0;
+      setRows((current) => [...current, {
           ...result,
-          id: sampleCountRef.current,
+          id: rowId,
           capturedElapsedMs,
           displayDelayMs: Math.round(performance.now() - captureStartedAt),
           thumbnail: image,
           browserVision,
-        },
-      ]);
-
-      if (activeRef.current && sampleCountRef.current < MAX_SAMPLES) {
-        const processingMs = performance.now() - captureStartedAt;
-        timerRef.current = setTimeout(
-          () => void analyzeNextFrame(),
-          Math.max(0, SAMPLE_INTERVAL_MS - processingMs),
-        );
-      } else {
-        releaseCapture();
-      }
+        }].sort((a, b) => a.capturedElapsedMs - b.capturedElapsedMs));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "映像解析に失敗しました。");
+      consecutiveErrorsRef.current += 1;
+      if (consecutiveErrorsRef.current >= 2) releaseCapture();
+    } finally {
+      inFlightCountRef.current = Math.max(0, inFlightCountRef.current - 1);
+      setInFlightCount(inFlightCountRef.current);
+    }
+  }
+
+  function scheduleFrame() {
+    if (!activeRef.current) return;
+    if (sampleCountRef.current >= maxSamples) {
       releaseCapture();
+      return;
+    }
+    const mode = SAMPLING_MODES[samplingMode];
+    const enoughTimePassed = performance.now() - lastCaptureAtRef.current >= currentSampleInterval();
+    if (enoughTimePassed && inFlightCountRef.current < mode.concurrency) {
+      void analyzeFrame();
     }
   }
 
@@ -514,6 +511,13 @@ export default function YouTubeTranscriber() {
     setRows([]);
     previousStateRef.current = null;
     sampleCountRef.current = 0;
+    setCapturedCount(0);
+    inFlightCountRef.current = 0;
+    lastCaptureAtRef.current = 0;
+    latestStateElapsedRef.current = -1;
+    consecutiveErrorsRef.current = 0;
+    setInFlightCount(0);
+    setLatestCapturedElapsedMs(null);
     previousHorseCentersRef.current = [];
     previousPoseVectorRef.current = null;
     liveVisionRef.current = EMPTY_VISION;
@@ -548,7 +552,8 @@ export default function YouTubeTranscriber() {
 
       displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
       visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
-      timerRef.current = setTimeout(() => void analyzeNextFrame(), 2_000);
+      lastCaptureAtRef.current = performance.now() + 700;
+      timerRef.current = setInterval(scheduleFrame, SCHEDULER_INTERVAL_MS);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "";
       setError(
@@ -566,7 +571,8 @@ export default function YouTubeTranscriber() {
       exportedAt: new Date().toISOString(),
       source: "youtube-visual-frames-no-audio",
       videoId,
-      sampleIntervalMs: SAMPLE_INTERVAL_MS,
+      samplingMode,
+      adaptiveIntervalsMs: SAMPLING_MODES[samplingMode],
       raceContext,
       results: rows.map(({ thumbnail, ...row }) => {
         void thumbnail;
@@ -606,7 +612,7 @@ export default function YouTubeTranscriber() {
           <div className="race-context-editor">
             <div>
               <strong>出走馬名簿（任意）</strong>
-              <p>YouTube概要欄を貼り付けます。結果・着順セクションはモデルへ送る前に除外します。</p>
+              <p>YouTube概要欄を貼り付けます。着順が混じっていても削除し、馬番・馬名・騎手だけを送ります。</p>
             </div>
             <textarea
               value={description}
@@ -624,7 +630,7 @@ export default function YouTubeTranscriber() {
                     {entrant.number}番 {entrant.horseName}{entrant.jockey ? ` / ${entrant.jockey}` : ""}
                   </span>
                 ))}
-                <small>{removedSpoilerLines}行の結果候補を除外。馬番が映像で読めた場合だけ馬名を使います。</small>
+                <small>{removedSpoilerLines}個の結果ラベル・着順を除外。馬番が映像で読めた場合だけ馬名を使います。</small>
               </div>
             )}
           </div>
@@ -633,7 +639,7 @@ export default function YouTubeTranscriber() {
             <div className="video-wrap" ref={videoWrapRef}>
               <iframe
                 ref={youtubeIframeRef}
-                src={`https://www.youtube-nocookie.com/embed/${videoId}?playsinline=1&enablejsapi=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${videoId}?playsinline=1&enablejsapi=1&rel=0&cc_load_policy=0`}
                 title="YouTube video player"
                 allow="autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
@@ -655,6 +661,32 @@ export default function YouTubeTranscriber() {
                 <li>共有後、音声付き再生とブラウザ内CVが始まる</li>
               </ol>
               <p className="audio-free">音声: <strong>利用者へ再生／AI入力には使わない</strong></p>
+              <div className="sampling-controls">
+                <label>
+                  API頻度
+                  <select
+                    value={samplingMode}
+                    onChange={(event) => setSamplingMode(event.target.value as SamplingMode)}
+                    disabled={analyzing}
+                  >
+                    {Object.entries(SAMPLING_MODES).map(([value, mode]) => (
+                      <option key={value} value={value}>{mode.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  最大フレーム
+                  <select
+                    value={maxSamples}
+                    onChange={(event) => setMaxSamples(Number(event.target.value))}
+                    disabled={analyzing}
+                  >
+                    {[5, 10, 15, 30, 60].map((value) => (
+                      <option key={value} value={value}>{value}枚</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className="capture-actions">
                 {!analyzing ? (
                   <button onClick={startVisualAnalysis} disabled={!authorized || visionStatus === "loading"}>
@@ -669,10 +701,10 @@ export default function YouTubeTranscriber() {
               </div>
               <small className="capture-status">
                 {analyzing
-                  ? `連続認識中・実況 ${rows.length}/${MAX_SAMPLES}（約3秒間隔）`
+                  ? `連続認識中・取得 ${capturedCount}/${maxSamples}・API処理中 ${inFlightCount}件`
                   : rows.length
                     ? `${rows.length}フレームの解析完了`
-                    : `最大${MAX_SAMPLES}フレームを比較`}
+                    : `${SAMPLING_MODES[samplingMode].label}・最大${maxSamples}フレーム`}
               </small>
             </div>
           </div>
@@ -696,8 +728,8 @@ export default function YouTubeTranscriber() {
                 <div>
                   <small>実況ターゲット</small>
                   <strong>
-                    {pendingElapsedMs !== null
-                      ? `動画 +${formatElapsed(pendingElapsedMs)}を映像理解・Jev判断・実況生成中`
+                    {inFlightCount > 0 && latestCapturedElapsedMs !== null
+                      ? `動画 +${formatElapsed(latestCapturedElapsedMs)}まで解析中（${inFlightCount}件並列）`
                       : analyzing
                         ? "次の映像フレームを待機中"
                         : "解析終了"}
@@ -719,7 +751,7 @@ export default function YouTubeTranscriber() {
                     </div>
                     <div className="jev-line">
                       <small>Jevあり · {row.jev.decision.event}</small>
-                      <p>{row.jev.text}</p>
+                      <p>{row.jev.spoken ? row.jev.text : "— 変化待ち"}</p>
                     </div>
                   </article>
                 ))}
@@ -763,7 +795,7 @@ export default function YouTubeTranscriber() {
                   <div>
                     <small>Jev判断 → 同じ固定LLM</small>
                     <code>{row.jev.decision.event}</code>
-                    <p>{row.jev.text}</p>
+                    <p>{row.jev.spoken ? row.jev.text : "— 変化待ち（生成を省略）"}</p>
                     <span>
                       {row.visionLatencyMs + row.jev.decisionLatencyMs + row.jev.narrationLatencyMs} ms
                     </span>

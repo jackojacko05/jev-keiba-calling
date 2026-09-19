@@ -27,6 +27,19 @@ const visualStateSchema = z.object({
   ]),
   jockeyActionConfidence: z.number().min(0).max(1),
   jockeyActionEvidence: z.string(),
+  cameraShot: z.enum(["ゲート", "正面", "横", "後方", "俯瞰", "リプレイ・演出", "不明"]),
+  visibleHorses: z.array(z.object({
+    number: z.number().int().min(1).max(99),
+    horseName: z.string(),
+    screenPosition: z.enum(["左", "中央", "右", "不明"]),
+    movement: z.string(),
+    confidence: z.number().min(0).max(1),
+  })).max(6),
+});
+
+const frameAnalysisSchema = z.object({
+  visualState: visualStateSchema,
+  directNarration: z.string().max(80),
 });
 
 const browserVisionSchema = z.object({
@@ -58,12 +71,14 @@ type VisualState = z.infer<typeof visualStateSchema>;
 
 type JevDecision = {
   event: string;
+  delivery: string;
   urgency: number;
   speakNow: number;
   confidence: number;
 };
 
 const EVENT_OPTIONS = {
+  start_break: "ゲートが開く、出遅れ、または発馬直後の明確な変化",
   lead_change: "先頭交代、または先頭争いの決着",
   rapid_close: "後続馬または馬群が急速に接近",
   position_change: "注目に値する位置取りの変化",
@@ -72,6 +87,13 @@ const EVENT_OPTIONS = {
   rider_drive: "騎手が明確に追い始めた、または腕の動きが強まった",
   rider_hold: "騎手が上体を起こす、または控える動作が見える",
   uncertain: "映像だけでは重要イベントを特定できない",
+} as const;
+
+const DELIVERY_OPTIONS = {
+  hold: "新情報が乏しく発話を待つ",
+  brief: "現在位置や隊列を短く更新する",
+  call: "動き出した馬や位置変化を強調する",
+  climax: "直線の攻防やゴールを強く伝える",
 } as const;
 
 function highestProbability(probabilities: Record<string, number> | undefined) {
@@ -88,10 +110,10 @@ async function extractVisualState(
   const startedAt = performance.now();
   const { object } = await generateObject({
     model: COMMENTARY_MODEL,
-    schema: visualStateSchema,
-    schemaName: "horse_race_visual_state",
+    schema: frameAnalysisSchema,
+    schemaName: "horse_race_frame_analysis",
     system:
-      "あなたは競馬映像の視覚解析器です。音声・実況・字幕の内容は使わず、画像の画素から確認できる事実だけを構造化してください。名簿は馬番と馬名の対応表であり、着順情報ではありません。ゼッケンの馬番が画像ではっきり読め、名簿と一致した場合だけ馬名を使ってください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。",
+      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。名簿は馬番と馬名の対応表であり、着順情報ではありません。ゼッケンの馬番が画像ではっきり読め、名簿と一致した場合だけ馬名を使ってください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
     messages: [
       {
         role: "user",
@@ -105,7 +127,7 @@ async function extractVisualState(
               spoilerSafeRaceRoster: raceContext,
             }),
           },
-          { type: "image", image: imageBase64, mediaType: "image/jpeg" },
+          { type: "file", data: imageBase64, mediaType: "image/jpeg" },
         ],
       },
     ],
@@ -113,7 +135,8 @@ async function extractVisualState(
   });
 
   return {
-    state: object,
+    state: object.visualState,
+    directText: object.directNarration.trim(),
     latencyMs: Math.round(performance.now() - startedAt),
   };
 }
@@ -128,6 +151,11 @@ async function askJev(state: VisualState) {
         type: "choice",
         instructions: "現在の視覚状態で実況に使う最重要イベントを1つ選ぶ。騎手動作の信頼度が低い場合は騎手イベントを選ばない",
         criteria: EVENT_OPTIONS,
+      },
+      delivery: {
+        type: "choice",
+        instructions: "いま出す実況の強さを選ぶ。前回との差が乏しい場合はholdを選ぶ",
+        criteria: DELIVERY_OPTIONS,
       },
       urgency: {
         type: "score",
@@ -146,6 +174,7 @@ async function askJev(state: VisualState) {
   });
 
   const event = response.answers.event;
+  const delivery = response.answers.delivery;
   const urgency = response.answers.urgency;
   const speakNow = response.answers.speakNow;
 
@@ -153,6 +182,7 @@ async function askJev(state: VisualState) {
     latencyMs: Math.round(performance.now() - startedAt),
     decision: {
       event: event.choice,
+      delivery: delivery.choice,
       urgency: urgency.score,
       speakNow: speakNow.probability,
       confidence: Math.min(
@@ -168,7 +198,7 @@ async function narrate(state: VisualState, decision?: JevDecision) {
   const { text } = await generateText({
     model: COMMENTARY_MODEL,
     instructions:
-      "あなたは日本語の競馬実況者です。与えられた視覚解析の事実だけを使い、馬名・馬番・順位を創作しないでください。騎手動作は信頼度0.65以上の場合だけ触れ、断定ではなく観察表現にしてください。音声情報は存在しません。出力は実況文1文のみ、45文字以内です。判断不能ならその旨を簡潔に述べてください。",
+      "あなたは日本語の競馬実況者です。与えられた視覚解析の事実だけを使い、馬名・馬番・順位を創作しないでください。騎手動作は信頼度0.65以上の場合だけ触れ、断定ではなく観察表現にしてください。『確認』『判別』『映像では』など解析作業を説明する語を避け、レースの変化を現在形で伝えてください。出力は実況文1文のみ、45文字以内です。",
     prompt: JSON.stringify(
       decision
         ? { task: "Jevの判断を優先して実況する", visualState: state, jevDecision: decision }
@@ -197,6 +227,8 @@ function demoResult(elapsedMs: number) {
     jockeyAction: "追っている可能性",
     jockeyActionConfidence: 0.72,
     jockeyActionEvidence: "上体が低く、腕の前後運動が見える",
+    cameraShot: "横",
+    visibleHorses: [],
   };
 
   return {
@@ -205,7 +237,8 @@ function demoResult(elapsedMs: number) {
     visionLatencyMs: 920,
     direct: { text: "先頭は一団、各馬が激しく競り合っています。", latencyMs: 710 },
     jev: {
-      decision: { event: "position_change", urgency: 1.3, speakNow: 0.82, confidence: 0.76 },
+      decision: { event: "position_change", delivery: "call", urgency: 1.3, speakNow: 0.82, confidence: 0.76 },
+      spoken: true,
       decisionLatencyMs: 120,
       narrationLatencyMs: 620,
       text: "馬群が凝縮、ここから位置取りが変わりそうです！",
@@ -244,19 +277,22 @@ export async function POST(request: Request) {
       parsedBrowserVision.success ? parsedBrowserVision.data : null,
       parsedRaceContext.success ? parsedRaceContext.data : null,
     );
-    const [direct, jevResult] = await Promise.all([
-      narrate(vision.state),
-      askJev(vision.state),
-    ]);
-    const assisted = await narrate(vision.state, jevResult.decision);
+    const jevResult = await askJev(vision.state);
+    const spoken = jevResult.decision.delivery !== "hold" &&
+      jevResult.decision.speakNow >= 0.5 &&
+      (vision.state.shouldSpeak || jevResult.decision.urgency >= 1);
+    const assisted = spoken
+      ? await narrate(vision.state, jevResult.decision)
+      : { text: "", latencyMs: 0 };
 
     return NextResponse.json({
       mode: "live",
       visualState: vision.state,
       visionLatencyMs: vision.latencyMs,
-      direct,
+      direct: { text: vision.directText, latencyMs: 0 },
       jev: {
         decision: jevResult.decision,
+        spoken,
         decisionLatencyMs: jevResult.latencyMs,
         narrationLatencyMs: assisted.latencyMs,
         text: assisted.text,
@@ -268,13 +304,26 @@ export async function POST(request: Request) {
     const customerVerificationRequired =
       message.includes("customer_verification_required") ||
       message.includes("valid credit card");
+    const rateLimited = message.includes("rate_limit") || message.includes("429");
+    const insufficientCredit =
+      message.includes("insufficient") ||
+      message.includes("credit balance") ||
+      message.includes("402");
+    const invalidKey = message.includes("Unauthorized") || message.includes("401") || message.includes("API key");
+    const status = rateLimited ? 429 : insufficientCredit ? 402 : invalidKey ? 401 : 502;
     return NextResponse.json(
       {
         error: customerVerificationRequired
           ? "Vercel AI Gatewayの無料枠を使うには、Vercelチームへのカード登録が必要です。クレジット購入は不要です。"
+          : rateLimited
+            ? "モデルのレート制限に達しました。API頻度を『節約』へ下げ、少し待ってから再開してください。"
+            : insufficientCredit
+              ? "AI Gatewayのクレジット残高が不足しています。"
+              : invalidKey
+                ? "AI Gateway APIキーが無効、または対象環境に設定されていません。"
           : "映像解析に失敗しました。Gatewayの残高・キー・画像対応モデルを確認してください。",
       },
-      { status: 502 },
+      { status },
     );
   }
 }
