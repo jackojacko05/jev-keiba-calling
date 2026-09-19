@@ -5,7 +5,7 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "google/gemini-3-flash";
+const COMMENTARY_MODEL = process.env.COMMENTARY_MODEL ?? "google/gemini-3.5-flash-lite";
 const JEV_MODEL = "typesafe-ai/jev";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -37,8 +37,17 @@ const visualStateSchema = z.object({
   })).max(6),
 });
 
+const rawVisualStateSchema = visualStateSchema.extend({
+  visibleHorses: z.array(z.object({
+    number: z.number().int().min(1).max(99),
+    screenPosition: z.enum(["左", "中央", "右", "不明"]),
+    movement: z.string(),
+    confidence: z.number().min(0).max(1),
+  })).max(6),
+});
+
 const frameAnalysisSchema = z.object({
-  visualState: visualStateSchema,
+  visualState: rawVisualStateSchema,
   directNarration: z.string().max(80),
 });
 
@@ -113,7 +122,7 @@ async function extractVisualState(
     schema: frameAnalysisSchema,
     schemaName: "horse_race_frame_analysis",
     system:
-      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。名簿は馬番と馬名の対応表であり、着順情報ではありません。まず先頭争いと隊列を観察し、次にゼッケンを拡大して数字を読みます。ゼッケンの数字を一桁ずつ視認でき、名簿と一致した場合だけ馬名を使い、visibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。visibleHorsesに信頼度0.7以上の馬がいれば、最大2頭まで『16番ウインカーネリアン』のように馬番と馬名を優先して呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
+      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。馬名や出走名簿は与えられていません。まず先頭争いと隊列を観察し、次にゼッケンを拡大して数字を読みます。ゼッケンの数字を一桁ずつ明確に視認できた馬だけvisibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。馬を特定できる場合も馬名を作らず『16番』のように馬番だけで呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
     messages: [
       {
         role: "user",
@@ -122,9 +131,16 @@ async function extractVisualState(
             type: "text",
             text: JSON.stringify({
               task: "現在の映像フレームを解析する",
-              previousVisualState: previousState,
+              previousVisualState: previousState ? {
+                ...previousState,
+                visibleHorses: previousState.visibleHorses.map((horse) => ({
+                  number: horse.number,
+                  screenPosition: horse.screenPosition,
+                  movement: horse.movement,
+                  confidence: horse.confidence,
+                })),
+              } : null,
               browserVision,
-              spoilerSafeRaceRoster: raceContext,
             }),
           },
           { type: "file", data: imageBase64, mediaType: "image/jpeg" },
@@ -135,8 +151,17 @@ async function extractVisualState(
     reasoning: "none",
   });
 
+  const entrantsByNumber = new Map((raceContext?.entrants ?? []).map((entrant) => [entrant.number, entrant]));
+  const state: VisualState = {
+    ...object.visualState,
+    visibleHorses: object.visualState.visibleHorses.map((horse) => ({
+      ...horse,
+      horseName: entrantsByNumber.get(horse.number)?.horseName ?? "",
+    })),
+  };
+
   return {
-    state: object.visualState,
+    state,
     directText: object.directNarration.trim(),
     latencyMs: Math.round(performance.now() - startedAt),
   };
@@ -226,6 +251,18 @@ function groundNarration(
       .map((horse) => horse.horseName),
   );
   let grounded = text;
+  for (const horse of state.visibleHorses) {
+    if (
+      horse.horseName &&
+      horse.confidence >= minConfidence &&
+      visibleNumbers.has(horse.number)
+    ) {
+      grounded = grounded.replace(
+        new RegExp(`${horse.number}番(?!${escapeRegExp(horse.horseName)})`, "g"),
+        `${horse.number}番${horse.horseName}`,
+      );
+    }
+  }
   for (const entrant of raceContext?.entrants ?? []) {
     if (groundedNames.has(entrant.horseName)) continue;
     const safeName = escapeRegExp(entrant.horseName);

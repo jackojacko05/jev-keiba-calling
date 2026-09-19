@@ -194,6 +194,7 @@ export default function YouTubeTranscriber() {
   const previousHorseCentersRef = useRef<Array<{ x: number; y: number }>>([]);
   const previousPoseVectorRef = useRef<number[] | null>(null);
   const commentaryFeedRef = useRef<HTMLDivElement | null>(null);
+  const abortControllersRef = useRef<Set<AbortController>>(new Set());
 
   function loadVideo() {
     const id = getYouTubeVideoId(url);
@@ -218,7 +219,7 @@ export default function YouTubeTranscriber() {
     setError("");
   }
 
-  function releaseCapture() {
+  function releaseCapture(abortRequests = true) {
     activeRef.current = false;
     if (timerRef.current) clearInterval(timerRef.current);
     if (visionTimerRef.current) clearTimeout(visionTimerRef.current);
@@ -226,6 +227,10 @@ export default function YouTubeTranscriber() {
     visionTimerRef.current = null;
     displayStreamRef.current?.getTracks().forEach((track) => track.stop());
     displayStreamRef.current = null;
+    if (abortRequests) {
+      abortControllersRef.current.forEach((controller) => controller.abort());
+      abortControllersRef.current.clear();
+    }
     if (captureVideoRef.current) captureVideoRef.current.srcObject = null;
     captureVideoRef.current = null;
     setAnalyzing(false);
@@ -233,7 +238,7 @@ export default function YouTubeTranscriber() {
     setVisionStatus(objectDetectorRef.current ? "ready" : "idle");
   }
 
-  useEffect(() => releaseCapture, []);
+  useEffect(() => () => releaseCapture(), []);
 
   useEffect(() => {
     commentaryFeedRef.current?.scrollTo({
@@ -465,13 +470,17 @@ export default function YouTubeTranscriber() {
     setInFlightCount(inFlightCountRef.current);
     setLatestCapturedElapsedMs(capturedElapsedMs);
 
+    let controller: AbortController | null = null;
     try {
       const canvas = captureVideoCanvas();
       const image = canvasToJpeg(canvas);
       const browserVision = useBrowserCv ? liveVisionRef.current : null;
+      controller = new AbortController();
+      abortControllersRef.current.add(controller);
       const response = await fetch("/api/video-commentary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           image,
           elapsedMs: capturedElapsedMs,
@@ -499,10 +508,12 @@ export default function YouTubeTranscriber() {
           browserVision,
         }].sort((a, b) => a.capturedElapsedMs - b.capturedElapsedMs));
     } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError(caught instanceof Error ? caught.message : "映像解析に失敗しました。");
       consecutiveErrorsRef.current += 1;
       if (consecutiveErrorsRef.current >= 2) releaseCapture();
     } finally {
+      if (controller) abortControllersRef.current.delete(controller);
       inFlightCountRef.current = Math.max(0, inFlightCountRef.current - 1);
       setInFlightCount(inFlightCountRef.current);
     }
@@ -511,7 +522,7 @@ export default function YouTubeTranscriber() {
   function scheduleFrame() {
     if (!activeRef.current) return;
     if (sampleCountRef.current >= maxSamples) {
-      releaseCapture();
+      if (inFlightCountRef.current === 0) releaseCapture(false);
       return;
     }
     const mode = SAMPLING_MODES[samplingMode];
@@ -574,7 +585,7 @@ export default function YouTubeTranscriber() {
       window.setTimeout(() => sendYouTubeCommand("setOption", ["captions", "track", {}]), 500);
       window.setTimeout(() => sendYouTubeCommand("setOption", ["captions", "track", {}]), 1_500);
 
-      displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
+      displayStream.getVideoTracks()[0]?.addEventListener("ended", () => releaseCapture());
       if (useBrowserCv) visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
       lastCaptureAtRef.current = performance.now() + 700;
       timerRef.current = setInterval(scheduleFrame, SCHEDULER_INTERVAL_MS);
@@ -729,7 +740,7 @@ export default function YouTubeTranscriber() {
                     映像解析と再生を同時開始
                   </button>
                 ) : (
-                  <button className="stop" onClick={releaseCapture}>解析を停止</button>
+                  <button className="stop" onClick={() => releaseCapture()}>解析を停止</button>
                 )}
                 <button className="secondary" onClick={downloadJson} disabled={!rows.length || analyzing}>
                   結果JSONを保存
