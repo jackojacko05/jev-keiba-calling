@@ -44,7 +44,7 @@ export default function Home() {
           <div><dt>Gateway</dt><dd>{status?.aiGateway ? "接続済み" : "未設定"}</dd></div>
           <div><dt>固定LLM</dt><dd>{status?.commentaryModel ?? "確認中"}</dd></div>
           <div><dt>Jev</dt><dd>{status?.jevModel ?? "確認中"}</dd></div>
-          <div><dt>入力</dt><dd>映像フレームのみ</dd></div>
+          <div><dt>入力</dt><dd>映像＋ブラウザCV</dd></div>
           <div><dt>音声</dt><dd>取得しない</dd></div>
         </dl>
       </section>
@@ -52,7 +52,7 @@ export default function Home() {
       <YouTubeTranscriber />
 
       <p className="note">
-        各フレームは固定LLMで一度だけ視覚状態へ変換し、その共通状態から
+        ブラウザ内CVを連続実行し、定期フレームは固定LLMで一度だけ視覚状態へ変換します。その共通状態から
         「LLM直接実況」と「<code>typesafe-ai/jev</code>判断＋同じLLM」を生成します。
         表示遅延には映像抽出・Gateway通信・生成処理が含まれます。
       </p>

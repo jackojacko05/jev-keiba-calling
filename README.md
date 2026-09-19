@@ -9,9 +9,11 @@ YouTube競馬映像をミュート再生し、同じ映像フレームと同じ�
 - 共通の視覚状態 → 固定LLMによる実況（Jevなし）
 - 同じ視覚状態 → Jevの構造化判断 → 同じ固定LLMによる実況（Jevあり）
 
-映像は8秒ごと、最大6フレーム取得します。各結果には動画開始からの経過時間、視覚抽出時間、各経路の処理時間、画面に結果が出るまでの遅延を表示します。結果JSONには画像自体を含めません。
+ブラウザ内ではCOCO-SSDによる馬・人物検出とMoveNetによる姿勢推定を約350ms間隔で連続実行します。実況用の映像フレームは約3秒ごと、最大10回取得します。実況文は固定高さのライブ窓へ時系列に追記し、処理中の動画時刻も表示します。各結果には動画開始からの経過時間、視覚抽出時間、各経路の処理時間、画面に結果が出るまでの遅延を表示します。結果JSONには画像自体を含めません。
 
 音声はブラウザへ要求せず、サーバーへ送信しません。YouTubeから動画や音声をダウンロードする実装もありません。ユーザーが共有を許可したブラウザタブの表示領域から、埋め込みプレイヤー部分の静止画だけを切り出します。
+
+JRA公式動画などの概要欄は任意で貼り付けられます。解析はブラウザ内で行い、「レース結果」「着順」「払戻」以降を除外して、馬番・馬名・騎手の名簿だけをサーバーへ渡します。映像内の馬番が明確に読めた場合だけ馬名候補として使います。
 
 ## Setup
 
@@ -25,7 +27,7 @@ npm run dev
 
 ```env
 AI_GATEWAY_API_KEY=...
-COMMENTARY_MODEL=openai/gpt-5-mini
+COMMENTARY_MODEL=google/gemini-2.5-flash-lite
 ```
 
 - `AI_GATEWAY_API_KEY`: Vercel AI Gatewayで発行する唯一の必須キー
@@ -45,10 +47,11 @@ Jevは `typesafe-ai/jev` 固定です。生成モデルとJevは、どちらもV
 ## Run the visual benchmark
 
 1. YouTube URLを入力して「動画を開く」
-2. 映像解析に必要な権利・許諾の確認欄をチェック
-3. 「映像解析と再生を同時開始」を押す
-4. 共有画面で、このプレビュータブを選択する
-5. 動画がミュートで再生され、解析結果が順次表示される
+2. 必要ならYouTube概要欄を貼り、「名簿だけ抽出」で内容を確認
+3. 映像解析に必要な権利・許諾の確認欄をチェック
+4. 「映像解析と再生を同時開始」を押す
+5. 共有画面で、このプレビュータブを選択する
+6. 動画がミュートで再生され、ブラウザ内CVと実況が順次表示される
 
 アプリは `preferCurrentTab: true` と `selfBrowserSurface: "include"` を指定して現在のタブを優先します。ただしこれらはブラウザへのヒントであり、ブラウザが無視することがあります。その場合はYouTubeを別タブで再生し、そのタブを共有します。
 
@@ -56,9 +59,10 @@ Jevは `typesafe-ai/jev` 固定です。生成モデルとJevは、どちらもV
 
 視覚モデルの差が比較へ混ざらないよう、各フレームから視覚状態を一度だけ抽出し、両経路で共有します。
 
-1. 固定LLMが画像から共通の視覚状態を抽出
-2. Jevなし: 固定LLMが共通状態から実況を生成
-3. Jevあり: `typesafe-ai/jev` が共通状態を評価し、同じ固定LLMが判断を反映した実況を生成
+1. ブラウザ内のCOCO-SSDとMoveNetが、馬数・馬群密度・人物姿勢・手首の変化を継続的に推定
+2. 固定LLMが同じ画像、ブラウザCVの状態、ネタバレ除去済み名簿から共通の視覚状態を抽出
+3. Jevなし: 固定LLMが共通状態から実況を生成
+4. Jevあり: `typesafe-ai/jev` が共通状態を評価し、同じ固定LLMが判断を反映した実況を生成
 
 これはJev単体による映像認識ではありません。Jevはテキスト化された状態を高速評価するレイヤーです。
 
@@ -93,5 +97,7 @@ npm run build
 - [Jev: a new model for real-time agent control](https://vercel.com/i/jev-agent-control)
 - [Vercel AI Gateway with AI SDK](https://vercel.com/docs/ai-gateway/sdks-and-apis/ai-sdk)
 - [MDN: MediaDevices.getDisplayMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
+- [TensorFlow.js COCO-SSD](https://github.com/tensorflow/tfjs-models/tree/master/coco-ssd)
+- [TensorFlow.js pose-detection / MoveNet](https://github.com/tensorflow/tfjs-models/tree/master/pose-detection)
 - [Vercel Authentication](https://vercel.com/docs/deployment-protection/methods-to-protect-deployments/vercel-authentication)
 - [YouTube Terms of Service](https://www.youtube.com/static?template=terms)
