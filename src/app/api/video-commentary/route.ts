@@ -11,7 +11,7 @@ const JEV_MODEL = "typesafe-ai/jev";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 const visualStateSchema = z.object({
-  phase: z.enum(["発走前", "スタート", "序盤", "向正面", "コーナー", "直線", "ゴール", "不明"]),
+  phase: z.enum(["発走前", "スタート", "序盤", "向正面", "コーナー", "直線", "ゴール", "ゴール後", "不明"]),
   focus: z.string().describe("画面上で最も注目すべき馬または馬群。識別不能なら位置で表す"),
   event: z.string().describe("このフレームで視覚的に確認できる出来事"),
   facts: z.array(z.string()).min(1).max(4),
@@ -124,7 +124,7 @@ async function extractVisualState(
     schema: frameAnalysisSchema,
     schemaName: "horse_race_frame_analysis",
     system:
-      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕・画面上の字幕テロップの内容は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。馬名や出走名簿は与えられていません。2枚ある場合は1枚目が直前、2枚目が現在です。まず両画像の馬群・カメラ位置・進行方向を比較して位置変化を捉え、次に現在画像のゼッケンを拡大して数字を読みます。画面の左右だけを根拠に先頭・順位・内外を決めてはいけません。先頭は、進行方向と前後関係が画像間で明瞭な場合だけ述べてください。ゼッケンの数字を一桁ずつ明確に視認できた馬だけvisibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。速度・距離・順位表示など放送グラフィックの数字を馬番として扱わないでください。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationは同じ事実だけから作る45文字以内の自然な日本語実況1文です。馬を特定できる場合も馬名を作らず『16番』のように馬番だけで呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
+      "あなたは競馬映像の視覚解析器兼実況者です。音声・実況・字幕の文章は使わず、画像の画素から確認できるレース映像の事実だけを構造化してください。馬名や出走名簿は与えられていません。2枚ある場合は1枚目が直前、2枚目が現在です。まず両画像の馬群・カメラ位置・進行方向を比較して位置変化を捉え、次に現在画像のゼッケンを拡大して数字を読みます。画面の左右だけを根拠に先頭・順位・内外を決めてはいけません。先頭は、進行方向と前後関係が画像間で明瞭な場合だけ述べてください。コース上の100m・200mなどの残距離標識が見える場面は直線として扱ってください。前画像が激しい先頭争いで、現在画像が正面の接写へ切り替わり、計時が固定され速度表示が消え、騎手が体を起こし始めていればゴール後を強く疑ってください。ゴール線そのものが見えない場合は勝者や着順を断定しないでください。ゼッケンの数字を一桁ずつ明確に視認できた馬だけvisibleHorsesへ入れてください。6と16、3と13など末尾だけが似る馬番を推測で補完してはいけません。速度・距離・ゲート番号など単独の放送数字を馬番として扱わないでください。一方、複数の馬番と勝負服アイコンが縦に並ぶ現在進行中の順位パネルは、ライブの先頭候補を補助するためだけに使えます。最終結果・リプレイ・表彰・まとめ画面の順位は使わないでください。読めない数字はvisibleHorseNumbersへ入れず、位置表現を使ってください。連続する同じカメラショットでは、前フレームで高信頼に識別した馬を毛色・勝負服・位置関係が一致する1フレーム先まで追跡して構いません。発走は、馬体がゲート前方へ明確に飛び出している場合だけ『スタート』とし、枠内の馬や扉らしき形だけでゲートが開いたと判断しないでください。騎手の意図を断定せず、上体・肘・手首の観察可能な動きから『可能性』として分類してください。遠景・遮蔽・低解像度では必ず判別不能または低い信頼度にしてください。directNarrationはeventを主語・前後関係・馬番を反転させずに言い換えた、45文字以内の自然な日本語実況1文です。馬を特定できる場合も馬名を作らず『16番』のように馬番だけで呼んでください。『確認』『判別』『映像では』など解析作業を説明する語を避け、見えているレース展開を実況してください。",
     messages: [
       {
         role: "user",
@@ -161,12 +161,15 @@ async function extractVisualState(
   });
 
   const entrantsByNumber = new Map((raceContext?.entrants ?? []).map((entrant) => [entrant.number, entrant]));
+  const visibleNumbers = new Set(object.visualState.visibleHorseNumbers);
   const state: VisualState = {
     ...object.visualState,
-    visibleHorses: object.visualState.visibleHorses.map((horse) => ({
-      ...horse,
-      horseName: entrantsByNumber.get(horse.number)?.horseName ?? "",
-    })),
+    visibleHorses: object.visualState.visibleHorses
+      .filter((horse) => visibleNumbers.has(horse.number))
+      .map((horse) => ({
+        ...horse,
+        horseName: entrantsByNumber.get(horse.number)?.horseName ?? "",
+      })),
   };
 
   return {
@@ -344,12 +347,20 @@ export async function POST(request: Request) {
     const decisiveEvent =
       (jevResult.decision.event === "start_break" && vision.state.phase === "スタート") ||
       ["lead_change", "rapid_close", "finish"].includes(jevResult.decision.event);
+    const firstBeat =
+      !parsedPrevious.success &&
+      vision.state.phase !== "不明" &&
+      vision.state.shouldSpeak;
+    const observableRaceAction =
+      vision.state.phase !== "不明" ||
+      vision.state.visibleHorseNumbers.length > 0 ||
+      !/不明|確認できない|見えない/.test(vision.state.event);
     const periodicBeat =
       body.elapsedMs >= 3_000 &&
       body.elapsedMs % 3_000 < 1_000 &&
-      vision.state.phase !== "不明" &&
+      observableRaceAction &&
       jevResult.decision.event !== "uncertain";
-    const spoken = decisiveEvent || periodicBeat || (
+    const spoken = firstBeat || decisiveEvent || periodicBeat || (
       jevResult.decision.delivery !== "hold" &&
       jevResult.decision.speakNow >= 0.5 &&
       (vision.state.shouldSpeak || jevResult.decision.urgency >= 1)
