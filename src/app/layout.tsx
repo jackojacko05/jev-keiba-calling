@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Jev Keiba Calling",
-  description: "Jev-assisted and direct LLM horse-race commentary benchmark",
+  description: "Video-only Jev-assisted and direct LLM horse-race commentary benchmark",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
