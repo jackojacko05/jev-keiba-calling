@@ -101,7 +101,7 @@ const SAMPLING_MODES: Record<SamplingMode, {
 }> = {
   economy: { label: "節約（変化時2〜4秒）", low: 4_000, medium: 3_000, high: 2_000, concurrency: 2 },
   balanced: { label: "標準（変化時1〜3秒）", low: 3_000, medium: 1_800, high: 1_000, concurrency: 3 },
-  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 4 },
+  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 3 },
 };
 const VISION_INTERVAL_MS = 350;
 const SCHEDULER_INTERVAL_MS = 250;
@@ -301,10 +301,10 @@ export default function YouTubeTranscriber() {
 
   function canvasToJpeg(source: HTMLCanvasElement) {
     const canvas = document.createElement("canvas");
-    canvas.width = Math.min(896, source.width);
+    canvas.width = Math.min(1280, source.width);
     canvas.height = Math.max(1, Math.round((source.height / source.width) * canvas.width));
     canvas.getContext("2d")?.drawImage(source, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.72);
+    return canvas.toDataURL("image/jpeg", 0.85);
   }
 
   function summarizeVision(
@@ -571,6 +571,8 @@ export default function YouTubeTranscriber() {
       sendYouTubeCommand("unMute");
       sendYouTubeCommand("playVideo");
       sendYouTubeCommand("setOption", ["captions", "track", {}]);
+      window.setTimeout(() => sendYouTubeCommand("setOption", ["captions", "track", {}]), 500);
+      window.setTimeout(() => sendYouTubeCommand("setOption", ["captions", "track", {}]), 1_500);
 
       displayStream.getVideoTracks()[0]?.addEventListener("ended", releaseCapture);
       if (useBrowserCv) visionTimerRef.current = setTimeout(() => void runVisionLoop(), 700);
