@@ -52,8 +52,8 @@ export default function Home() {
       <YouTubeTranscriber />
 
       <p className="note">
-        ブラウザ内CVを連続実行し、定期フレームは固定LLMで一度だけ視覚状態へ変換します。その共通状態から
-        「LLM直接実況」と「<code>typesafe-ai/jev</code>判断＋同じLLM」を生成します。
+        ブラウザ内CVを連続実行し、定期フレームは固定LLMで一度だけ全頭位置と実写状態へ変換します。
+        同じ候補群から「固定LLM選択」と「<code>typesafe-ai/jev</code>選択」を比較し、同じ固定LLMで実況文にします。
         表示遅延には映像抽出・Gateway通信・生成処理が含まれます。
       </p>
     </main>
