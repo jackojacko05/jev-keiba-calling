@@ -8,6 +8,14 @@ type GroundingState = {
     horseName: string;
     confidence: number;
   }>;
+  fieldTracker?: {
+    horses: Array<{
+      number: number;
+      horseName: string;
+      trackingStatus: "tracked" | "unreadable";
+      confidence: number;
+    }>;
+  };
 };
 
 type RaceContext = {
@@ -28,10 +36,17 @@ export function groundNarration(
 ) {
   const visibleNumbers = new Set(state.visibleHorseNumbers);
   const minConfidence = state.cameraShot === "俯瞰" ? 0.95 : 0.85;
+  const trackerHorses = (state.fieldTracker?.horses ?? []).filter(
+    (horse) => horse.trackingStatus === "tracked" && horse.confidence >= 0.78,
+  );
+  const trackerNumbers = new Set(trackerHorses.map((horse) => horse.number));
   const groundedNames = new Set(
-    state.visibleHorses
+    [
+      ...state.visibleHorses
       .filter((horse) => horse.confidence >= minConfidence && visibleNumbers.has(horse.number))
       .map((horse) => horse.horseName),
+      ...trackerHorses.map((horse) => horse.horseName),
+    ].filter(Boolean),
   );
   let grounded = text;
   for (const horse of state.visibleHorses) {
@@ -46,10 +61,19 @@ export function groundNarration(
         .replace(new RegExp(`(?<!\\d)${horse.number}番`, "g"), horse.horseName);
     }
   }
+  for (const horse of trackerHorses) {
+    if (!horse.horseName) continue;
+    const safeName = escapeRegExp(horse.horseName);
+    grounded = grounded
+      .replace(new RegExp(`(?<!\\d)${horse.number}番(?:の)?${safeName}`, "g"), horse.horseName)
+      .replace(new RegExp(`(?<!\\d)${horse.number}番`, "g"), horse.horseName);
+  }
   for (const entrant of raceContext?.entrants ?? []) {
     if (groundedNames.has(entrant.horseName)) continue;
     const safeName = escapeRegExp(entrant.horseName);
-    const replacement = visibleNumbers.has(entrant.number) ? `${entrant.number}番` : "馬群の一頭";
+    const replacement = visibleNumbers.has(entrant.number) || trackerNumbers.has(entrant.number)
+      ? `${entrant.number}番`
+      : "馬群の一頭";
     grounded = grounded
       .replace(new RegExp(`(?<!\\d)${entrant.number}番(?:の)?${safeName}`, "g"), replacement)
       .replace(new RegExp(safeName, "g"), replacement);

@@ -6,17 +6,37 @@ import { parseRaceDescription, type RaceContext } from "@/lib/race-context";
 
 type VisualState = {
   phase: string;
-  focus: string;
-  event: string;
-  facts: string[];
-  changeFromPrevious: string;
-  shouldSpeak: boolean;
+  phaseEvidence: string;
+  overallFormation: string;
+  sceneFacts: string[];
+  changes: string[];
+  leadSituation: string;
+  leadSituationEvidence: string;
   uncertainty: string;
   visibleHorseNumbers: number[];
   jockeyAction: string;
   jockeyActionConfidence: number;
   jockeyActionEvidence: string;
   cameraShot: string;
+  cameraTraversal: string;
+  fieldTracker: {
+    detected: boolean;
+    leaderDirection: string;
+    horses: Array<{
+      number: number;
+      horseName: string;
+      trackingStatus: "tracked" | "unreadable";
+      orderFromFront: number | null;
+      normalizedProgress: number | null;
+      groupIndex: number | null;
+      gapToAhead: string;
+      orderChange: number | null;
+      movementFromPrevious: string;
+      confidence: number;
+    }>;
+    confidence: number;
+    uncertainty: string;
+  };
   horseObservations: Array<{
     trackId: string;
     number: number | null;
@@ -45,8 +65,8 @@ type VisualState = {
 type CommentaryCandidate = {
   id: string;
   kind: string;
+  source: string;
   text: string;
-  priorityHint: string;
   confidence: number;
   horseNumbers: number[];
 };
@@ -68,23 +88,29 @@ type VideoResult = {
   visualState: VisualState;
   commentaryCandidates?: CommentaryCandidate[];
   visionLatencyMs: number;
-  direct: { text: string; latencyMs: number };
+  direct: {
+    text: string;
+    latencyMs: number;
+    decision: CommentaryDecision;
+  };
   jev: {
-    decision: {
-      event: string;
-      candidateId: string;
-      candidateText: string;
-      delivery: string;
-      urgency: number;
-      speakNow: number;
-      interrupt: number;
-      confidence: number;
-    };
+    decision: CommentaryDecision;
     spoken: boolean;
     decisionLatencyMs: number;
     narrationLatencyMs: number;
     text: string;
   };
+};
+
+type CommentaryDecision = {
+  event: string;
+  candidateId: string;
+  candidateText: string;
+  delivery: string;
+  urgency: number;
+  speakNow: number;
+  interrupt: number;
+  confidence: number;
 };
 
 type TimelineRow = VideoResult & {
@@ -93,6 +119,16 @@ type TimelineRow = VideoResult & {
   displayDelayMs: number;
   thumbnail: string;
   browserVision: BrowserVision | null;
+};
+
+type RecentCommentary = {
+  elapsedMs: number;
+  directText: string;
+  assistedText: string;
+  directCandidateId: string;
+  directCandidateText: string;
+  jevCandidateId: string;
+  jevCandidateText: string;
 };
 
 type Prediction = {
@@ -225,6 +261,11 @@ export default function YouTubeTranscriber() {
   const commentaryFeedRef = useRef<HTMLDivElement | null>(null);
   const abortControllersRef = useRef<Set<AbortController>>(new Set());
   const previousImageRef = useRef<string | null>(null);
+  const recentCommentaryRef = useRef<RecentCommentary[]>([]);
+  const mentionedHorseNumbersRef = useRef<{ direct: Set<number>; jev: Set<number> }>({
+    direct: new Set(),
+    jev: new Set(),
+  });
 
   function loadVideo() {
     const id = getYouTubeVideoId(url);
@@ -520,6 +561,11 @@ export default function YouTubeTranscriber() {
           previousState: previousStateRef.current,
           browserVision,
           raceContext,
+          recentCommentary: recentCommentaryRef.current,
+          mentionedHorseNumbers: {
+            direct: [...mentionedHorseNumbersRef.current.direct],
+            jev: [...mentionedHorseNumbersRef.current.jev],
+          },
         }),
       });
       const result = (await response.json()) as VideoResult | { error: string };
@@ -531,6 +577,25 @@ export default function YouTubeTranscriber() {
         previousStateRef.current = result.visualState;
         latestStateElapsedRef.current = capturedElapsedMs;
       }
+      const candidatesById = new Map((result.commentaryCandidates ?? []).map((candidate) => [candidate.id, candidate]));
+      for (const number of candidatesById.get(result.direct.decision.candidateId)?.horseNumbers ?? []) {
+        mentionedHorseNumbersRef.current.direct.add(number);
+      }
+      for (const number of candidatesById.get(result.jev.decision.candidateId)?.horseNumbers ?? []) {
+        mentionedHorseNumbersRef.current.jev.add(number);
+      }
+      recentCommentaryRef.current = [
+        ...recentCommentaryRef.current.filter((item) => item.elapsedMs !== capturedElapsedMs),
+        {
+          elapsedMs: capturedElapsedMs,
+          directText: result.direct.text,
+          assistedText: result.jev.text,
+          directCandidateId: result.direct.decision.candidateId,
+          directCandidateText: result.direct.decision.candidateText,
+          jevCandidateId: result.jev.decision.candidateId,
+          jevCandidateText: result.jev.decision.candidateText,
+        },
+      ].sort((a, b) => a.elapsedMs - b.elapsedMs).slice(-6);
       consecutiveErrorsRef.current = 0;
       setRows((current) => [...current, {
           ...result,
@@ -571,6 +636,8 @@ export default function YouTubeTranscriber() {
     setRows([]);
     previousStateRef.current = null;
     previousImageRef.current = null;
+    recentCommentaryRef.current = [];
+    mentionedHorseNumbersRef.current = { direct: new Set(), jev: new Set() };
     sampleCountRef.current = 0;
     setCapturedCount(0);
     inFlightCountRef.current = 0;
@@ -636,7 +703,7 @@ export default function YouTubeTranscriber() {
 
   function downloadJson() {
     const payload = {
-      schemaVersion: 7,
+      schemaVersion: 8,
       exportedAt: new Date().toISOString(),
       source: "youtube-visual-frames-no-audio",
       videoId,
@@ -827,12 +894,12 @@ export default function YouTubeTranscriber() {
                   <article className="commentary-line" key={`commentary-${row.id}`}>
                     <time>+{formatElapsed(row.capturedElapsedMs)}</time>
                     <div>
-                      <small>Jevなし</small>
+                      <small>Jevなし · 選択「{row.direct.decision.candidateText}」</small>
                       <p>{row.direct.text}</p>
                     </div>
                     <div className="jev-line">
                       <small>
-                        Jevあり · {row.jev.decision.event}
+                        Jevあり · 選択「{row.jev.decision.candidateText}」
                         {row.jev.decision.interrupt >= 0.5 ? " · 割り込み" : ""}
                       </small>
                       <p>{row.jev.text}</p>
@@ -864,8 +931,37 @@ export default function YouTubeTranscriber() {
                   </div>
                   <div>
                     <small>映像から抽出した共通状態</small>
-                    <strong>{row.visualState.phase} — {row.visualState.event}</strong>
-                    <p>{row.visualState.facts.join(" / ")}</p>
+                    <strong>{row.visualState.phase} — {row.visualState.overallFormation}</strong>
+                    <p>{row.visualState.sceneFacts.join(" / ")}</p>
+                    {row.visualState.changes.length > 0 && (
+                      <p>前フレームとの差分: {row.visualState.changes.join(" / ")}</p>
+                    )}
+                    <div className="field-tracker" aria-label="位置パネルから読み取った全頭の位置">
+                      <small>
+                        位置パネル（{row.visualState.fieldTracker.leaderDirection}・
+                        信頼度{Math.round(row.visualState.fieldTracker.confidence * 100)}%）
+                      </small>
+                      <div className="field-tracker-list">
+                        {row.visualState.fieldTracker.horses.map((horse) => (
+                          <span
+                            className={horse.trackingStatus === "tracked" ? "tracked" : "unreadable"}
+                            key={`tracker-${row.id}-${horse.number}`}
+                          >
+                            <b>{horse.number}番{horse.horseName ? ` ${horse.horseName}` : ""}</b>
+                            {horse.trackingStatus === "tracked" && horse.orderFromFront !== null
+                              ? ` ${horse.orderFromFront}番手・前差${horse.gapToAhead}・${horse.movementFromPrevious}`
+                              : " 位置パネルで未読"}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    {row.visualState.horseObservations.length > 0 && (
+                      <p>
+                        現在カメラ内: {row.visualState.horseObservations.map((horse) => (
+                          horse.horseName || (horse.number === null ? horse.trackId : `${horse.number}番`)
+                        )).join(" / ")}
+                      </p>
+                    )}
                     <p className="rider-reading">
                       騎手: {row.visualState.jockeyAction}
                       （{Math.round(row.visualState.jockeyActionConfidence * 100)}%）
@@ -873,6 +969,7 @@ export default function YouTubeTranscriber() {
                   </div>
                   <div>
                     <small>固定LLM・Jevなし</small>
+                    <code>{row.direct.decision.candidateText}</code>
                     <p>{row.direct.text}</p>
                     <span>{row.visionLatencyMs + row.direct.latencyMs} ms</span>
                   </div>
@@ -880,6 +977,10 @@ export default function YouTubeTranscriber() {
                     <small>Jevが候補を選択 → 同じ固定LLM</small>
                     <code>{row.jev.decision.candidateText}</code>
                     <p>{row.jev.text}</p>
+                    <span>
+                      候補 {row.commentaryCandidates?.length ?? 0}件・割り込み
+                      {Math.round(row.jev.decision.interrupt * 100)}%
+                    </span>
                     <span>
                       {row.visionLatencyMs + row.jev.decisionLatencyMs + row.jev.narrationLatencyMs} ms
                     </span>

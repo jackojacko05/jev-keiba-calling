@@ -1,25 +1,37 @@
 export type CommentaryCandidate = {
   id: string;
-  kind: "race_event" | "horse_move" | "rider_move" | "field_change" | "race_context";
+  kind: "scene_fact" | "camera_horse" | "field_position" | "rider_move" | "field_change" | "race_context";
+  source: "camera" | "field_tracker" | "frame_difference" | "scene";
   text: string;
-  priorityHint: "critical" | "high" | "normal" | "filler";
   confidence: number;
   horseNumbers: number[];
 };
 
 type CandidateState = {
   phase: string;
-  focus: string;
-  event: string;
-  facts: string[];
-  changeFromPrevious: string;
-  visibleHorseNumbers: number[];
+  overallFormation: string;
+  sceneFacts: string[];
+  changes: string[];
   jockeyAction: string;
   jockeyActionConfidence: number;
+  fieldTracker?: {
+    detected: boolean;
+    horses: Array<{
+      number: number;
+      horseName: string;
+      trackingStatus: "tracked" | "unreadable";
+      orderFromFront: number | null;
+      gapToAhead: "接触" | "小" | "中" | "大" | "不明";
+      movementFromPrevious: "進出" | "後退" | "前との差を詰める" | "前との差が開く" | "位置維持" | "初回" | "不明";
+      confidence: number;
+    }>;
+  };
   horseObservations?: Array<{
     trackId: string;
     number: number | null;
     horseName: string;
+    racePosition?: string;
+    relativeToNearby?: string;
     movement: string;
     confidence: number;
     riderAction?: string;
@@ -28,6 +40,8 @@ type CandidateState = {
   visibleHorses: Array<{
     number: number;
     horseName: string;
+    racePosition?: string;
+    relativeToNearby?: string;
     movement: string;
     confidence: number;
     riderAction?: string;
@@ -35,23 +49,22 @@ type CandidateState = {
   }>;
 };
 
-function priorityFor(text: string, kind: CommentaryCandidate["kind"]) {
-  if (/発走|出遅|落馬|故障|ゴール|写真判定|先頭交代|差し切|並んだ|並ぶ/.test(text)) return "critical" as const;
-  if (/接近|追い上|差を詰|抜け出|競り|追って|鞭|進路変更/.test(text)) return "high" as const;
-  if (kind === "race_context") return "filler" as const;
-  return "normal" as const;
-}
-
 function useful(text: string) {
   return text.trim() && !/^(不明|なし|変化なし|判別不能)$/.test(text.trim());
 }
 
+/**
+ * Mechanically converts observations into an action space. It intentionally
+ * contains no editorial ranking, novelty score, urgency, or coverage hint;
+ * those decisions belong to the selector being compared.
+ */
 export function buildCommentaryCandidates(state: CandidateState): CommentaryCandidate[] {
   const candidates: CommentaryCandidate[] = [];
   const seen = new Set<string>();
 
   function add(
     kind: CommentaryCandidate["kind"],
+    source: CommentaryCandidate["source"],
     text: string,
     confidence: number,
     horseNumbers: number[] = [],
@@ -62,16 +75,28 @@ export function buildCommentaryCandidates(state: CandidateState): CommentaryCand
     candidates.push({
       id: `candidate_${candidates.length + 1}`,
       kind,
+      source,
       text: normalized,
-      priorityHint: priorityFor(normalized, kind),
       confidence: Math.max(0, Math.min(1, confidence)),
       horseNumbers,
     });
   }
 
-  add("race_event", state.event, 0.88, state.visibleHorseNumbers);
-  for (const fact of state.facts) add("race_event", fact, 0.82, state.visibleHorseNumbers);
-  add("field_change", state.changeFromPrevious, 0.86, state.visibleHorseNumbers);
+  for (const change of state.changes) {
+    add("field_change", "frame_difference", change, 0.82);
+  }
+
+  for (const horse of state.fieldTracker?.horses ?? []) {
+    if (horse.trackingStatus !== "tracked" || horse.orderFromFront === null) continue;
+    const label = horse.horseName || `${horse.number}番`;
+    add(
+      "field_position",
+      "field_tracker",
+      `${label}は全体の${horse.orderFromFront}番手。前との差は${horse.gapToAhead}。前フレーム比は${horse.movementFromPrevious}`,
+      horse.confidence,
+      [horse.number],
+    );
+  }
 
   const observations = state.horseObservations ?? state.visibleHorses.map((horse) => ({
     ...horse,
@@ -81,7 +106,13 @@ export function buildCommentaryCandidates(state: CandidateState): CommentaryCand
   for (const horse of observations) {
     const label = horse.horseName || (horse.number === null ? horse.trackId : `${horse.number}番`);
     const horseNumbers = horse.number === null ? [] : [horse.number];
-    add("horse_move", `${label}：${horse.movement}`, horse.confidence, horseNumbers);
+    add(
+      "camera_horse",
+      "camera",
+      `${label}はカメラ内で${horse.racePosition ?? "位置不明"}。${horse.relativeToNearby ?? "周辺関係不明"}。${horse.movement}`,
+      horse.confidence,
+      horseNumbers,
+    );
     if (
       (horse.riderActionConfidence ?? 0) >= 0.7 &&
       horse.riderAction &&
@@ -89,19 +120,24 @@ export function buildCommentaryCandidates(state: CandidateState): CommentaryCand
     ) {
       add(
         "rider_move",
-        `${label}の騎手：${horse.riderAction}`,
+        "camera",
+        `${label}の騎手は${horse.riderAction}`,
         horse.riderActionConfidence ?? 0,
         horseNumbers,
       );
     }
   }
 
+  for (const fact of state.sceneFacts) {
+    add("scene_fact", "scene", fact, 0.78);
+  }
   if (state.jockeyActionConfidence >= 0.8 && !/通常|判別不能/.test(state.jockeyAction)) {
-    add("rider_move", `画面内の騎手：${state.jockeyAction}`, state.jockeyActionConfidence);
+    add("rider_move", "camera", `画面内の騎手は${state.jockeyAction}`, state.jockeyActionConfidence);
+  }
+  add("race_context", "scene", `${state.phase}。${state.overallFormation}`, 0.72);
+  if (candidates.length < 2) {
+    add("race_context", "scene", "現在フレームから確実な位置変化は読み取れない", 0.65);
   }
 
-  add("race_context", `${state.phase}。${state.focus}`, 0.72, state.visibleHorseNumbers);
-  if (candidates.length < 2) add("race_context", "現在の隊列と先頭付近の状況を簡潔に伝える", 0.65);
-
-  return candidates.slice(0, 24);
+  return candidates.slice(0, 48);
 }

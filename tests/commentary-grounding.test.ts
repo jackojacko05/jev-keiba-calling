@@ -40,6 +40,29 @@ test("an ungrounded roster name is removed", () => {
   assert.equal(text, "馬群の一頭が先頭。");
 });
 
+test("a high-confidence full-field tracker reading grounds a horse outside the camera crop", () => {
+  const text = groundNarration(
+    "8番が7番手から前との差を詰める。",
+    {
+      phase: "向正面",
+      cameraShot: "横",
+      visibleHorseNumbers: [],
+      visibleHorses: [],
+      fieldTracker: {
+        horses: [{
+          number: 8,
+          horseName: "ベータ",
+          trackingStatus: "tracked",
+          confidence: 0.9,
+        }],
+      },
+    },
+    { entrants: [{ number: 8, horseName: "ベータ" }] },
+  );
+
+  assert.equal(text, "ベータが7番手から前との差を詰める。");
+});
+
 test("a close lead battle cannot be narrated as pulling away", () => {
   const text = groundNarration(
     "先頭ウインカーネリアンが13番を引き離す！",
