@@ -1,6 +1,7 @@
 type GroundingState = {
   phase: string;
   cameraShot: string;
+  leadSituation?: "単独先頭" | "接戦" | "一団" | "不明";
   visibleHorseNumbers: number[];
   visibleHorses: Array<{
     number: number;
@@ -55,6 +56,24 @@ export function groundNarration(
   }
   if (state.phase !== "スタート") {
     grounded = grounded.replace(/スタートしました[。！]?/g, "馬群が進みます。");
+  }
+  if (
+    state.leadSituation !== "単独先頭" &&
+    /引き離|抜け出|独走|突き放|リードを広げ/.test(grounded)
+  ) {
+    const labels = state.visibleHorses
+      .filter((horse) => horse.confidence >= minConfidence && visibleNumbers.has(horse.number))
+      .slice(0, 2)
+      .map((horse) => `${horse.number}番${horse.horseName}`);
+    if (state.leadSituation === "接戦" && labels.length >= 2) {
+      grounded = `${labels[0]}と${labels[1]}、並んで先頭争い！`;
+    } else if (state.leadSituation === "接戦" && labels.length === 1) {
+      grounded = `${labels[0]}を中心に、並んで先頭争い！`;
+    } else if (state.leadSituation === "一団") {
+      grounded = "先頭は一団、馬群が競り合います！";
+    } else {
+      grounded = "先頭争いが続きます。";
+    }
   }
   return grounded.replace(/馬群の一頭、馬群の一頭/g, "馬群の各馬").trim();
 }

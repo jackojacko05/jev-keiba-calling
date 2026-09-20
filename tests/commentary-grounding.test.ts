@@ -39,3 +39,27 @@ test("an ungrounded roster name is removed", () => {
 
   assert.equal(text, "馬群の一頭が先頭。");
 });
+
+test("a close lead battle cannot be narrated as pulling away", () => {
+  const text = groundNarration(
+    "先頭ウインカーネリアンが13番を引き離す！",
+    {
+      phase: "直線",
+      cameraShot: "横",
+      leadSituation: "接戦",
+      visibleHorseNumbers: [13, 16],
+      visibleHorses: [
+        { number: 16, horseName: "ウインカーネリアン", confidence: 0.94 },
+        { number: 13, horseName: "ジューンブレア", confidence: 0.92 },
+      ],
+    },
+    {
+      entrants: [
+        { number: 13, horseName: "ジューンブレア" },
+        { number: 16, horseName: "ウインカーネリアン" },
+      ],
+    },
+  );
+
+  assert.equal(text, "16番ウインカーネリアンと13番ジューンブレア、並んで先頭争い！");
+});
