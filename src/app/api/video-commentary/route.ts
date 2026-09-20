@@ -490,6 +490,7 @@ const baselineSelectionSchema = z.object({
   urgency: z.number().min(0).max(2),
   interrupt: z.boolean(),
   confidence: z.number().min(0).max(1),
+  narration: z.string().min(1).max(60),
 });
 
 async function askBaseline(
@@ -507,6 +508,7 @@ async function askBaseline(
       "あなたはリアルタイム競馬実況で、次に発話する観測事実を1つ選ぶ選択器です。",
       "候補は知覚結果から機械的に作られており、重要度順ではありません。candidateIdだけを選び、候補の事実を書き換えないでください。",
       "映像状態、全頭位置パネル、直前フレームとの差分、直近の実況履歴、紹介済み馬番を材料にします。",
+      "選んだ候補だけを45文字以内の自然な実況1文へ変換しnarrationに入れてください。別候補の事実を足さず、馬名・馬番・順位を創作しません。位置パネルまたは実写で馬名が対応していれば原則として馬名で呼びます。解析作業を説明する語は使いません。",
     ].join(""),
     prompt: JSON.stringify({
       visualState: state,
@@ -520,6 +522,7 @@ async function askBaseline(
   const selected = candidates.find((candidate) => candidate.id === object.candidateId) ?? candidates[0];
   return {
     selected,
+    text: object.narration.trim(),
     latencyMs: Math.round(performance.now() - startedAt),
     decision: {
       event: selected.kind,
@@ -714,12 +717,9 @@ export async function POST(request: Request) {
       askJev(vision.state, commentaryCandidates, jevHistory, mentionedHorseNumbers.jev),
     ]);
     const spoken = true;
-    const [directNarration, assisted] = await Promise.all([
-      narrate(vision.state, directResult.decision),
-      narrate(vision.state, jevResult.decision),
-    ]);
+    const assisted = await narrate(vision.state, jevResult.decision);
     const directText = groundNarration(
-      directNarration.text,
+      directResult.text,
       vision.state,
       parsedRaceContext.success ? parsedRaceContext.data : null,
     );
@@ -734,7 +734,7 @@ export async function POST(request: Request) {
       visionLatencyMs: vision.latencyMs,
       direct: {
         text: directText,
-        latencyMs: directResult.latencyMs + directNarration.latencyMs,
+        latencyMs: directResult.latencyMs,
         decision: directResult.decision,
       },
       jev: {

@@ -165,8 +165,8 @@ const SAMPLING_MODES: Record<SamplingMode, {
   concurrency: number;
 }> = {
   economy: { label: "節約（変化時2〜4秒）", low: 4_000, medium: 3_000, high: 2_000, concurrency: 2 },
-  balanced: { label: "標準（変化時1〜3秒）", low: 3_000, medium: 1_800, high: 1_000, concurrency: 3 },
-  "one-second": { label: "1秒固定（短時間テスト）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 2 },
+  balanced: { label: "標準（変化時1〜2.5秒）", low: 2_500, medium: 1_500, high: 1_000, concurrency: 5 },
+  "one-second": { label: "1秒固定（短時間・最大8件並列）", low: 1_000, medium: 1_000, high: 1_000, concurrency: 8 },
 };
 const VISION_INTERVAL_MS = 350;
 const SCHEDULER_INTERVAL_MS = 250;
@@ -246,6 +246,7 @@ export default function YouTubeTranscriber() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeRef = useRef(false);
+  const playbackStartedRef = useRef(false);
   const startedAtRef = useRef(0);
   const sampleCountRef = useRef(0);
   const inFlightCountRef = useRef(0);
@@ -292,6 +293,7 @@ export default function YouTubeTranscriber() {
 
   function releaseCapture(abortRequests = true) {
     activeRef.current = false;
+    playbackStartedRef.current = false;
     if (timerRef.current) clearInterval(timerRef.current);
     if (visionTimerRef.current) clearTimeout(visionTimerRef.current);
     timerRef.current = null;
@@ -309,7 +311,37 @@ export default function YouTubeTranscriber() {
     setVisionStatus(objectDetectorRef.current ? "ready" : "idle");
   }
 
-  useEffect(() => () => releaseCapture(), []);
+  useEffect(() => {
+    const handleYouTubeState = (event: MessageEvent) => {
+      if (!event.origin.endsWith("youtube.com") && !event.origin.endsWith("youtube-nocookie.com")) return;
+      let payload: unknown = event.data;
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== "object") return;
+      const message = payload as { event?: string; info?: unknown };
+      const playerState = message.event === "onStateChange"
+        ? message.info
+        : message.event === "infoDelivery" && message.info && typeof message.info === "object"
+          ? (message.info as { playerState?: unknown }).playerState
+          : undefined;
+      if (activeRef.current && playerState === 1) {
+        playbackStartedRef.current = true;
+      }
+      if (activeRef.current && playbackStartedRef.current && (playerState === 0 || playerState === 2)) {
+        releaseCapture();
+      }
+    };
+    window.addEventListener("message", handleYouTubeState);
+    return () => {
+      window.removeEventListener("message", handleYouTubeState);
+      releaseCapture();
+    };
+  }, []);
 
   useEffect(() => {
     commentaryFeedRef.current?.scrollTo({
@@ -514,7 +546,10 @@ export default function YouTubeTranscriber() {
     }
   }
 
-  function sendYouTubeCommand(func: "playVideo" | "unMute" | "setOption", args: unknown[] = []) {
+  function sendYouTubeCommand(
+    func: "playVideo" | "unMute" | "setOption" | "addEventListener",
+    args: unknown[] = [],
+  ) {
     youtubeIframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: "command", func, args }),
       "https://www.youtube-nocookie.com",
@@ -648,6 +683,7 @@ export default function YouTubeTranscriber() {
     setLatestCapturedElapsedMs(null);
     previousHorseCentersRef.current = [];
     previousPoseVectorRef.current = null;
+    playbackStartedRef.current = false;
     liveVisionRef.current = EMPTY_VISION;
     setLiveVision(EMPTY_VISION);
 
@@ -680,6 +716,11 @@ export default function YouTubeTranscriber() {
       startedAtRef.current = performance.now();
       setAnalyzing(true);
       setVisionStatus("running");
+      youtubeIframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: "listening", id: "jev-keiba-player" }),
+        "https://www.youtube-nocookie.com",
+      );
+      sendYouTubeCommand("addEventListener", ["onStateChange"]);
       sendYouTubeCommand("unMute");
       sendYouTubeCommand("playVideo");
       sendYouTubeCommand("setOption", ["captions", "track", {}]);
@@ -892,7 +933,10 @@ export default function YouTubeTranscriber() {
                   <p className="commentary-empty">最初の実況を生成しています…</p>
                 ) : rows.map((row) => (
                   <article className="commentary-line" key={`commentary-${row.id}`}>
-                    <time>+{formatElapsed(row.capturedElapsedMs)}</time>
+                    <time>
+                      動画 +{formatElapsed(row.capturedElapsedMs)}
+                      <small>表示 +{formatElapsed(row.displayDelayMs)}</small>
+                    </time>
                     <div>
                       <small>Jevなし · 選択「{row.direct.decision.candidateText}」</small>
                       <p>{row.direct.text}</p>
