@@ -17,13 +17,38 @@ type VisualState = {
   jockeyActionConfidence: number;
   jockeyActionEvidence: string;
   cameraShot: string;
+  horseObservations: Array<{
+    trackId: string;
+    number: number | null;
+    horseName: string;
+    screenPosition: string;
+    racePosition: string;
+    relativeToNearby: string;
+    movement: string;
+    riderAction: string;
+    riderActionConfidence: number;
+    confidence: number;
+  }>;
   visibleHorses: Array<{
     number: number;
     horseName: string;
     screenPosition: string;
+    racePosition: string;
+    relativeToNearby: string;
     movement: string;
+    riderAction: string;
+    riderActionConfidence: number;
     confidence: number;
   }>;
+};
+
+type CommentaryCandidate = {
+  id: string;
+  kind: string;
+  text: string;
+  priorityHint: string;
+  confidence: number;
+  horseNumbers: number[];
 };
 
 type BrowserVision = {
@@ -41,14 +66,18 @@ type BrowserVision = {
 type VideoResult = {
   mode: "demo" | "live";
   visualState: VisualState;
+  commentaryCandidates?: CommentaryCandidate[];
   visionLatencyMs: number;
   direct: { text: string; latencyMs: number };
   jev: {
     decision: {
       event: string;
+      candidateId: string;
+      candidateText: string;
       delivery: string;
       urgency: number;
       speakNow: number;
+      interrupt: number;
       confidence: number;
     };
     spoken: boolean;
@@ -607,7 +636,7 @@ export default function YouTubeTranscriber() {
 
   function downloadJson() {
     const payload = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       exportedAt: new Date().toISOString(),
       source: "youtube-visual-frames-no-audio",
       videoId,
@@ -802,8 +831,11 @@ export default function YouTubeTranscriber() {
                       <p>{row.direct.text}</p>
                     </div>
                     <div className="jev-line">
-                      <small>Jevあり · {row.jev.decision.event}</small>
-                      <p>{row.jev.spoken ? row.jev.text : "— 変化待ち"}</p>
+                      <small>
+                        Jevあり · {row.jev.decision.event}
+                        {row.jev.decision.interrupt >= 0.5 ? " · 割り込み" : ""}
+                      </small>
+                      <p>{row.jev.text}</p>
                     </div>
                   </article>
                 ))}
@@ -845,9 +877,9 @@ export default function YouTubeTranscriber() {
                     <span>{row.visionLatencyMs + row.direct.latencyMs} ms</span>
                   </div>
                   <div>
-                    <small>Jev判断 → 同じ固定LLM</small>
-                    <code>{row.jev.decision.event}</code>
-                    <p>{row.jev.spoken ? row.jev.text : "— 変化待ち（生成を省略）"}</p>
+                    <small>Jevが候補を選択 → 同じ固定LLM</small>
+                    <code>{row.jev.decision.candidateText}</code>
+                    <p>{row.jev.text}</p>
                     <span>
                       {row.visionLatencyMs + row.jev.decisionLatencyMs + row.jev.narrationLatencyMs} ms
                     </span>

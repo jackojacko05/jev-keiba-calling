@@ -40,10 +40,10 @@ export function groundNarration(
       horse.confidence >= minConfidence &&
       visibleNumbers.has(horse.number)
     ) {
-      grounded = grounded.replace(
-        new RegExp(`(?<!\\d)${horse.number}番(?!${escapeRegExp(horse.horseName)})`, "g"),
-        `${horse.number}番${horse.horseName}`,
-      );
+      const safeName = escapeRegExp(horse.horseName);
+      grounded = grounded
+        .replace(new RegExp(`(?<!\\d)${horse.number}番(?:の)?${safeName}`, "g"), horse.horseName)
+        .replace(new RegExp(`(?<!\\d)${horse.number}番`, "g"), horse.horseName);
     }
   }
   for (const entrant of raceContext?.entrants ?? []) {
@@ -64,7 +64,7 @@ export function groundNarration(
     const labels = state.visibleHorses
       .filter((horse) => horse.confidence >= minConfidence && visibleNumbers.has(horse.number))
       .slice(0, 2)
-      .map((horse) => `${horse.number}番${horse.horseName}`);
+      .map((horse) => horse.horseName || `${horse.number}番`);
     if (state.leadSituation === "接戦" && labels.length >= 2) {
       grounded = `${labels[0]}と${labels[1]}、並んで先頭争い！`;
     } else if (state.leadSituation === "接戦" && labels.length === 1) {

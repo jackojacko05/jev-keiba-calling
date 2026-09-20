@@ -22,7 +22,7 @@ test("short horse numbers do not match inside longer numbers", () => {
     },
   );
 
-  assert.equal(text, "外から16番ウインカーネリアン、内から6番ナムラクレアが追走。");
+  assert.equal(text, "外からウインカーネリアン、内からナムラクレアが追走。");
 });
 
 test("an ungrounded roster name is removed", () => {
@@ -61,5 +61,5 @@ test("a close lead battle cannot be narrated as pulling away", () => {
     },
   );
 
-  assert.equal(text, "16番ウインカーネリアンと13番ジューンブレア、並んで先頭争い！");
+  assert.equal(text, "ウインカーネリアンとジューンブレア、並んで先頭争い！");
 });
